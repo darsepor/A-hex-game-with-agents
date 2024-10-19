@@ -17,10 +17,14 @@ class CustomGameEnv(gym.Env):
         self.action_space = spaces.MultiDiscrete([2, Q, R, Q, R])
         self.observation_space = spaces.Dict({
     "grid": spaces.Box(
-        low=np.array([[0, 0]]),
-        high=np.array([[1, 6]]),
+        low=np.full((2, Q, R), 0, dtype=np.int32),
+        high=np.array([
+            np.full((Q, R), 1, dtype=np.int32),
+            np.full((Q, R), 6, dtype=np.int32)
+        ], dtype=np.int32),
         shape=(2, Q, R),
-        dtype=np.int32),
+        dtype=np.int32
+    ),
     
     "gold": spaces.Box(
         low=0, high=10000,
@@ -28,7 +32,11 @@ class CustomGameEnv(gym.Env):
         dtype=np.int32
     )
 })
-        
+    def reset(self):
+        self.game = GameLogic(mode='reinforcementai_vs_reinforcementai')
+
+        initial_observation = self._get_observation()
+        return initial_observation
     def step(self, action):
         done = False
         
@@ -54,7 +62,42 @@ class CustomGameEnv(gym.Env):
         
         return obs, reward, done, {}
     
-    
+    def _get_observation(self):
+        Q = self.game.size * 2 + 1
+        R = self.game.size * 2 + 1
+        
+        terrain_layer = np.full((Q, R), -1, dtype=np.int32)  # Initialize with -1 for unused areas,
+                                                             #as it is an injective map from hex grid to observation space
+        units_layer = np.full((Q, R), -1, dtype=np.int32)    # Same for units
+        
+        for (q, r, s), hex_tile in self.game.atlas.landscape.items():
+            grid_q = q + self.game.size
+            grid_r = r + self.game.size
+
+            if hex_tile.is_water:
+                terrain_layer[grid_q, grid_r] = 0
+            else:
+                terrain_layer[grid_q, grid_r] = 1
+
+            if hex_tile.unit is None:
+                units_layer[grid_q, grid_r] = 0
+            else:
+                unit = hex_tile.unit
+                if isinstance(unit, Soldier):
+                    units_layer[grid_q, grid_r] = 1 if unit.owner == self.game.players[0] else 2
+                elif isinstance(unit, BattleShip):
+                    units_layer[grid_q, grid_r] = 3 if unit.owner == self.game.players[0] else 4
+                elif isinstance(unit, City):
+                    units_layer[grid_q, grid_r] = 5 if unit.owner == self.game.players[0] else 6
+
+        gold_values = np.array([self.game.players[0].currency, self.game.players[1].currency], dtype=np.int32)
+
+        observation = {
+            "grid": np.array([terrain_layer, units_layer], dtype=np.int32),
+            "gold": gold_values
+        }
+
+        return observation        
     #FIX ME: Abomination
     
     
@@ -133,4 +176,5 @@ class CustomGameEnv(gym.Env):
                 return True
 
             return False
+
 
