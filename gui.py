@@ -6,12 +6,12 @@ from game.entity import Entity, City, Soldier, BattleShip
 from game.hex import Hex
 
 class GameGUI:
-    def __init__(self, ai_vs_ai=False):
+    def __init__(self, mode='human_vs_simpleai'):
         pygame.init()
         self.screen = pygame.display.set_mode((1000, 1000))
         pygame.display.set_caption("Hex Game")
         self.clock = pygame.time.Clock()
-        self.game_logic = GameLogic(ai_vs_ai=ai_vs_ai)
+        self.game_logic = GameLogic(mode=mode)
         self.size = 30  #Hexagon radius
         self.center = (500, 500)
         self.running = True
@@ -21,7 +21,7 @@ class GameGUI:
         self.action_mode = None  #move or attack
         self.context_menu = None
         self.font = pygame.font.SysFont('Arial', 18, bold=False)
-        self.ai_vs_ai = ai_vs_ai
+        self.mode = mode
 
     def run(self):
         while self.running:
@@ -82,7 +82,7 @@ class GameGUI:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
-            elif not self.ai_vs_ai:
+            elif self.mode=='human_vs_simpleai':
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:  # Left click
                         if self.context_menu:
@@ -348,5 +348,5 @@ class GameGUI:
 
 
 if __name__ == "__main__":
-    gui = GameGUI(ai_vs_ai=False)
+    gui = GameGUI(mode='human_vs_simpleai')
     gui.run()

@@ -1,17 +1,21 @@
 
 import random
 from game.atlas import Atlas
-from game.player import Human, SimpleAI
+from game.player import Human, SimpleAI, ReinforcementAI
 from game.entity import City, Soldier, BattleShip, Entity
 from game.hex import Hex
 
 class GameLogic:
-    def __init__(self, ai_vs_ai=False):
+    def __init__(self, mode='human_vs_simpleai'):
         self.atlas = Atlas()
-        if ai_vs_ai:
-            self.players = [SimpleAI("AI 1", (255, 255, 255)), SimpleAI("AI 2", (0, 0, 0))]
-        else:
+        self.players = []
+        
+        if mode == 'human_vs_simpleai':
             self.players = [Human("You", (255, 255, 255)), SimpleAI("Opponent", (0, 0, 0))]
+        elif mode == 'simpleai_vs_simpleai':
+            self.players = [SimpleAI("AI 1", (255, 255, 255)), SimpleAI("AI 2", (0, 0, 0))]
+        elif mode == 'reinforcementai_vs_reinforcementai':
+            self.players = [ReinforcementAI("Reinforcement AI 1", (255, 255, 255)), ReinforcementAI("Reinforcement AI 2", (0, 0, 0))]
         self.current_player_index = 0
         self.size = 8  #Map size
         self.init_map()

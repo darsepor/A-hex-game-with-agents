@@ -189,3 +189,19 @@ class SimpleAI(Player): #doesn't really work, for testing the game
     @property
     def is_ai(self):
         return True
+
+
+
+
+class ReinforcementAI(Player):
+    def __init__(self, name, color):
+        super().__init__(name, color)
+        # Reinforcement learning attributes (e.g., model, exploration strategies) can be initialized here
+
+    def take_turn(self, game_logic):
+
+        pass
+
+    @property
+    def is_ai(self):
+        return True

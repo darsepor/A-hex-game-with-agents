@@ -9,7 +9,7 @@ class Entity:
         self.hitpoints = 1
 
     def attacked_by_soldier(self):
-        self.hitpoints -= 10
+        self.hitpoints -= 14
 
     def attacked_by_ship(self):
         self.hitpoints -= 10
