@@ -6,7 +6,7 @@ from game.entity import City, Soldier, BattleShip, Entity
 from game.hex import Hex
 
 class GameLogic:
-    def __init__(self, mode='human_vs_simpleai'):
+    def __init__(self, size, mode='human_vs_simpleai'):
         self.atlas = Atlas()
         self.players = []
         
@@ -17,7 +17,7 @@ class GameLogic:
         elif mode == 'reinforcementai_vs_reinforcementai':
             self.players = [ReinforcementAI("Reinforcement AI 1", (255, 255, 255)), ReinforcementAI("Reinforcement AI 2", (0, 0, 0))]
         self.current_player_index = 0
-        self.size = 8  #Map size
+        self.size = size  #Map size
         self.init_map()
         self.place_initial_cities()
         self.game_over = False
@@ -54,7 +54,7 @@ class GameLogic:
 
         #exclude tiles near the first city
         non_water_tiles = [tile for tile in non_water_tiles
-                           if self.atlas.distance(tile, player_city_tile) > 6]
+                           if self.atlas.distance(tile, player_city_tile) > 3]
         ai_city_tile = random.choice(non_water_tiles)
         ai_city = City(self.players[1])
         ai_city_tile.unit = ai_city
@@ -125,7 +125,7 @@ class GameLogic:
         current_player.take_turn(self)
         current_player.adjust_currency(len(current_player.cities))
         self.current_player_index = (self.current_player_index + 1) % 2
-
+        #print(self.current_player_index)
 
 
     def distance(self, a, b):

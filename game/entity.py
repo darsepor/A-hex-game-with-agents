@@ -9,10 +9,10 @@ class Entity:
         self.hitpoints = 1
 
     def attacked_by_soldier(self):
-        self.hitpoints -= 14
+        self.hitpoints -= 10
 
     def attacked_by_ship(self):
-        self.hitpoints -= 10
+        self.hitpoints -= 20
 
     @property
     def is_city(self):
@@ -32,7 +32,7 @@ class City(Entity):
 class Soldier(Entity):
     def __init__(self, owner):
         super().__init__(owner)
-        self.hitpoints = 20
+        self.hitpoints = 30
 
 
 class BattleShip(Entity):
