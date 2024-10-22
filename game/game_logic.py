@@ -54,7 +54,7 @@ class GameLogic:
 
         #exclude tiles near the first city
         non_water_tiles = [tile for tile in non_water_tiles
-                           if self.atlas.distance(tile, player_city_tile) > 3]
+                           if self.atlas.distance(tile, player_city_tile) > 0]
         ai_city_tile = random.choice(non_water_tiles)
         ai_city = City(self.players[1])
         ai_city_tile.unit = ai_city
@@ -107,7 +107,7 @@ class GameLogic:
             if isinstance(defender, City):
                 defender.owner.cities.remove(defender)
                 
-            if not defender.owner.units:
+            if not defender.owner.cities:
                 self.game_over = True
 
     def get_unit_hex(self, unit):

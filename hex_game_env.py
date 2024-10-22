@@ -43,11 +43,17 @@ class CustomGameEnv(gym.Env):
             self.mask[grid_q, grid_r] = 0.0
         
         
-    def reset(self):
-        self.game = GameLogic(size=self.game.size, mode='reinforcementai_vs_reinforcementai')
-        
+    def reset(self, new_size):
+        self.game = GameLogic(size=new_size, mode='reinforcementai_vs_reinforcementai')
+        self.mask = torch.full((new_size*2+1, new_size*2+1), float('-inf'), dtype=torch.float32)
+        for (q, r, s), hex_tile in self.game.atlas.landscape.items():
+            grid_q = q + self.game.size
+            grid_r = r + self.game.size
+
+            self.mask[grid_q, grid_r] = 0.0
         initial_observation = self._get_observation()
         return initial_observation
+    
     def step(self, action):
         done = False
         
@@ -56,14 +62,16 @@ class CustomGameEnv(gym.Env):
         source_tile = self.game.atlas.get_hex(source_q, source_r, -source_q - source_r)
         target_tile = self.game.atlas.get_hex(target_q, target_r, -target_q - target_r)
         success = False
-        reward = 1
+        reward = 10
         if action_type == 0:  # Move/Attack
             if target_tile.unit is not None and target_tile.unit.owner != self.game.players[self.game.current_player_index]:
-                reward = 30
+                reward = 40
+                if isinstance(target_tile.unit, City):
+                    reward = 300
             success = self._handle_move_attack(source_tile, target_tile)
 
         elif action_type == 1:  # Build
-            reward = 10
+            reward = 20
             success = self._handle_build(source_tile, target_tile)
         #print(source_tile.unit == True)
         #print(source_tile.unit.owner == self.game.current_player_index == True)
@@ -79,11 +87,13 @@ class CustomGameEnv(gym.Env):
             #    reward = 10
                 
         elif self.game.game_over:
-            reward +=5000
+            reward +=8000
             done = True
         
         #print(self.game.current_player_index)
+        #if success:
         self.game.next_turn()
+            
         #print(f"gugsdfg {self.game.current_player_index}")
         obs = self._get_observation()
         
@@ -110,11 +120,11 @@ class CustomGameEnv(gym.Env):
             else:
                 unit = hex_tile.unit
                 if isinstance(unit, Soldier):
-                    units_layer[grid_q, grid_r] = 1 if unit.owner == self.game.players[player] else -1
+                    units_layer[grid_q, grid_r] = 3 if unit.owner == self.game.players[player] else -3
                 elif isinstance(unit, BattleShip):
-                    units_layer[grid_q, grid_r] = 2 if unit.owner == self.game.players[player] else -2
+                    units_layer[grid_q, grid_r] = 7 if unit.owner == self.game.players[player] else -7
                 elif isinstance(unit, City):
-                    units_layer[grid_q, grid_r] = 6 if unit.owner == self.game.players[player] else -6
+                    units_layer[grid_q, grid_r] = 20 if unit.owner == self.game.players[player] else -20
         
         gold_values = np.array([self.game.players[player].currency, self.game.players[(player + 1) % 2].currency], dtype=np.int32)
 
@@ -143,12 +153,8 @@ class CustomGameEnv(gym.Env):
         
         
         if target_tile.unit is not None and target_tile.unit.owner != unit.owner:
-            if isinstance(unit, Soldier):
-                target_tile.unit.attacked_by_soldier
-                return True
-            else:
-                target_tile.unit.attacked_by_ship
-                return True
+            self.game.attack_unit(unit, target_tile.unit)
+            return True
 
         if target_tile.unit is not None:
             return False
