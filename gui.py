@@ -11,7 +11,7 @@ class GameGUI:
         self.screen = pygame.display.set_mode((1000, 1000))
         pygame.display.set_caption("Hex Game")
         self.clock = pygame.time.Clock()
-        self.game_logic = GameLogic(mode=mode)
+        self.game_logic = GameLogic(mode=mode, size=8)
         self.size = 30  #Hexagon radius
         self.center = (500, 500)
         self.running = True
@@ -348,5 +348,5 @@ class GameGUI:
 
 
 if __name__ == "__main__":
-    gui = GameGUI(mode='human_vs_simpleai')
+    gui = GameGUI(mode='simpleai_vs_simpleai')
     gui.run()

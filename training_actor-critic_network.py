@@ -27,8 +27,13 @@ class ActorCriticNetwork(nn.Module):
                                                                                              #nor do we mask invalid actions,
                                                                                              #so logits much be close
                                                                                              #update: had to use maybe too many masks to barely work
-                                                                                             #(feels like "might as well write a bunch of if statements") better approach needed
-                                                                                             
+                                                                                             #(feels like "might as well write a bunch of if statements"), better approach needed
+                                                                                             #update2: maybe an even more extensive/adaptive mask and rewarding only
+                                                                                             #winning and nothing else would still produce something interesting 
+                                                                                             #(ie, focusing on strategy instead of picking out "valid" actions)
+                                                                                             #intermediate rewards depending on how many pieces player has could help with the 'sparsity'
+                                                                                             #also, could maybe train against (or to imitate) an improved SimpleAI
+                                                                                             #and punish for losing against it
         
         self.critic_fc = nn.Linear(linear, 1)
 
@@ -66,7 +71,10 @@ class ActorCriticNetwork(nn.Module):
 
 epochs = 500
 learning_rate = 0.001
-discount_factor = 0.98
+discount_factor = 0.98 #gamma
+trace_decay_rate = 0.95 #lambda
+initialized = False #whether we're not training from scratch
+
 size = 5 #shared linear layer prevents from generalizing in diff sizes 
          #edit: oh right, 
          # 
@@ -75,6 +83,12 @@ size = 5 #shared linear layer prevents from generalizing in diff sizes
 env = CustomGameEnv(size)
 #print(env.size)
 model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
+
+saved_state_dict = torch.load("size-5-actor_critic_model.pth")
+model.load_state_dict(saved_state_dict)
+initialized = True
+eligibility_traces_player1 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
+eligibility_traces_player2 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
 
 total_optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay = 0.01)
 
@@ -93,6 +107,8 @@ for epoch in range(epochs):
     
     last_action = 0
     repeats = 0
+    I = 1
+    
     while not done:
         timestep +=1
         grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).cuda()
@@ -113,6 +129,7 @@ for epoch in range(epochs):
         action_type = action_type_distribution.sample()
         if torch.all((unit_tensor <= 0) | (unit_tensor > 7)):
             action_type = torch.tensor(1).cuda()
+        
         if(action_type==0):
             source_mask= source_mask + torch.where(unit_tensor == 20, torch.tensor(float('-inf')), torch.tensor(0.0))
         
@@ -128,7 +145,7 @@ for epoch in range(epochs):
         
         q_masking = source_tile_idx_int // env.size
         r_masking = source_tile_idx_int % env.size
-        
+        #print(q_masking)
         s_masking = -q_masking - r_masking
         
         q_coords, r_coords = torch.meshgrid(torch.arange(env.size), torch.arange(env.size), indexing='ij')
@@ -136,11 +153,13 @@ for epoch in range(epochs):
         
         dist = (torch.abs(q_coords - q_masking) + torch.abs(r_coords - r_masking) + torch.abs((-r_coords - q_coords) - (-r_masking - q_masking))) // 2
         condition = (dist > 0) & (dist <= 2) 
-        if action_type == 1:
-            condition = (dist > 0) & (dist <= 1) 
+        unit_tensor_cpu = unit_tensor.cpu()
+        if action_type == 1 or unit_tensor.squeeze(0)[q_masking][r_masking].item()==3:
+            condition = (dist == 1) 
         target_mask = torch.where(condition, torch.tensor(0.0), torch.tensor(float('-inf'))).cuda()
         
-        masked_target_logits = torch.clamp(target_tile_logits/temperature + target_mask, min=-1e9) + terrain_mask
+        filled_mask = torch.where(unit_tensor > 0, torch.tensor(float('-inf')), torch.tensor(0.0))
+        masked_target_logits = torch.clamp(target_tile_logits/temperature + target_mask, min=-1e9) + terrain_mask + filled_mask
 
         
         target_tile_probs = torch.softmax((masked_target_logits).view(-1), dim=-1)
@@ -160,8 +179,7 @@ for epoch in range(epochs):
             repeats = 0
             
         if repeats > 100:
-            reward = reward -200
-        total_reward += reward
+            reward = reward -50
         
         next_grid_tensor = torch.tensor(next_state["grid"]).float().unsqueeze(0).cuda()
         next_gold_tensor = torch.tensor(next_state["gold"]).float().unsqueeze(0).cuda()
@@ -176,17 +194,38 @@ for epoch in range(epochs):
         
         log_prob_action_type = action_type_distribution.log_prob(action_type)
         log_prob_source_tile = source_tile_distribution.log_prob(source_tile_idx)
-        log_prob_target_tile = target_tile_distribution.log_prob(target_tile_idx)
-        actor_loss = -(log_prob_action_type + log_prob_source_tile + log_prob_target_tile) * advantage
+        log_prob_target_tile = target_tile_distribution.log_prob(target_tile_idx) #a bit iffy, though maybe it is better to have a more
+                                                                                  #generalizable logit matrices that work with many board states instead of
+                                                                                  #trying to learn a ton of differing validities for differing states
+        actor_loss = -(log_prob_action_type + log_prob_source_tile + log_prob_target_tile) * I
+        I = 0.9995 * I #scaling with discount factor of 0.98 may be excessive with episodes of 
+                       #10 000 steps (majority of actions are not valid still, even with the current amount of masking)
         
         total_loss = actor_loss + critic_loss
         
         total_optimizer.zero_grad()
+        
+        
         total_loss.backward()
-        if victories > 4 or (victories > 0 and not done):
+        
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                if timestep % 2 ==0:
+                    eligibility_traces_player1[name] = (discount_factor * trace_decay_rate * eligibility_traces_player1[name] + param.grad) * advantage.item()
+
+                    param.grad = eligibility_traces_player1[name]
+                else:
+                    eligibility_traces_player2[name] = (discount_factor * trace_decay_rate * eligibility_traces_player2[name] + param.grad) * advantage.item()
+
+                    param.grad = eligibility_traces_player2[name]
+        
+        
+        if initialized or victories > 4 or (victories > 0 and not done):
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            
         total_optimizer.step()
-        if (reward > 0 and epoch<100) or timestep % 100 == 0:
+        if done or (reward >= 0 and epoch<100) or timestep % 100 == 0:
             grid = state["grid"][1]
             grid_str = '\n'.join([' '.join(map(str, row)) for row in grid])
             new = next_state["grid"][1]
@@ -205,9 +244,9 @@ for epoch in range(epochs):
             
             victories +=1
             time.sleep(10)
-        if timestep > 100 * (epoch+1):
-            done = True
-        elif repeats > 500:
+        
+        elif repeats > 1000 or timestep > 10000: #idea for restarting instead of just punishing for repeats is it's stuck in a minimum,
+                                                #so a new map may get it out of the distribution or whatnot
             done = True
     #if epoch % 10 == 0:
     #    print(f"Ep Reward: {total_reward}")

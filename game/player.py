@@ -45,7 +45,7 @@ class SimpleAI(Player): #doesn't really work, for testing the game
             return
 
         possessions = [hex_tile for hex_tile in game_logic.atlas.landscape.values()
-                       if hex_tile.unit and hex_tile.unit.owner == self]
+                       if hex_tile.unit is not None and hex_tile.unit.owner == self]
 
         #Categorize possessions into soldiers, ships, and cities
         soldiers, ships, cities = self.soldiers_ships_cities(possessions)
@@ -58,11 +58,11 @@ class SimpleAI(Player): #doesn't really work, for testing the game
         opponent = next(player for player in game_logic.players if player != self)
 
         first_unit_human = next((hex_tile for hex_tile in game_logic.atlas.landscape.values()
-                                 if hex_tile.unit and hex_tile.unit.owner == opponent),
+                                 if hex_tile.unit is not None and hex_tile.unit.owner == opponent),
                                 None)
         
 
-        if self.currency >= Entity.city_cost and first_unit_human:
+        if self.currency >= Entity.city_cost:
             chance = random.random()
             if chance <= 0.5 and self.currency >= Entity.soldier_cost:
                 soldier_candidates = []
@@ -105,16 +105,17 @@ class SimpleAI(Player): #doesn't really work, for testing the game
                     return
         else:
             human_possessions = [hex_tile for hex_tile in game_logic.atlas.landscape.values()
-                                 if hex_tile.unit and hex_tile.unit.owner == opponent]
+                                 if hex_tile.unit is not None and hex_tile.unit.owner == opponent]
             for movable_hex in possessions:
                 unit = movable_hex.unit
                 if isinstance(unit, City):
                     continue
                 target_hex = min(human_possessions,
                                    key=lambda hex_tile: game_logic.atlas.distance(hex_tile, movable_hex))
-                if target_hex:
-                    self.move_unit_towards_target(unit, movable_hex, target_hex, game_logic)
-                    return
+                if target_hex is not None:
+                    success = self.move_unit_towards_target(unit, movable_hex, target_hex, game_logic)
+                    if success:
+                        return
 
     def soldiers_ships_cities(self, hex_tiles):
         soldiers = set()
@@ -137,14 +138,14 @@ class SimpleAI(Player): #doesn't really work, for testing the game
         for soldier_hex in soldiers:
             neighbors = game_logic.atlas.neighbors(soldier_hex)
             for neighbor in neighbors:
-                if neighbor.unit and neighbor.unit.owner == opponent:
+                if neighbor.unit is not None and neighbor.unit.owner == opponent:
                     soldier_targets.add((neighbor, 'soldier', soldier_hex))
 
         ship_targets = set()
         for ship_hex in ships:
             neighbors = game_logic.atlas.neighbors_within_radius(ship_hex, 2)
             for neighbor in neighbors:
-                if neighbor.unit and neighbor.unit.owner == opponent:
+                if neighbor.unit is not None and neighbor.unit.owner == opponent:
                     ship_targets.add((neighbor, 'ship', ship_hex))
 
         targets = []
@@ -152,9 +153,9 @@ class SimpleAI(Player): #doesn't really work, for testing the game
             for target_hex, attack_type, attacker_hex in target_set:
                 unit = target_hex.unit
                 if isinstance(unit, BattleShip):
-                    priority = 1
-                elif isinstance(unit, Soldier):
                     priority = 2
+                elif isinstance(unit, Soldier):
+                    priority = 1
                 elif isinstance(unit, City):
                     priority = 3
                 else:
@@ -171,7 +172,7 @@ class SimpleAI(Player): #doesn't really work, for testing the game
                 final_target = random.choice(targets)
             _, target_hex, attack_type, attacker_hex = final_target
             attacker = attacker_hex.unit
-            if attacker and target_hex.unit:
+            if attacker is not None and target_hex.unit is not None:
                 game_logic.attack_unit(attacker, target_hex.unit)
 
                 return True

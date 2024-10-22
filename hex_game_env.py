@@ -62,16 +62,15 @@ class CustomGameEnv(gym.Env):
         source_tile = self.game.atlas.get_hex(source_q, source_r, -source_q - source_r)
         target_tile = self.game.atlas.get_hex(target_q, target_r, -target_q - target_r)
         success = False
-        reward = 10
+        reward = 0
         if action_type == 0:  # Move/Attack
-            if target_tile.unit is not None and target_tile.unit.owner != self.game.players[self.game.current_player_index]:
-                reward = 40
-                if isinstance(target_tile.unit, City):
-                    reward = 300
+            attacking = target_tile.unit is not None and target_tile.unit.owner != self.game.players[self.game.current_player_index] and isinstance(target_tile.unit, City)
+                
             success = self._handle_move_attack(source_tile, target_tile)
+            if attacking and success and target_tile.unit is None:
+                reward = 150
 
         elif action_type == 1:  # Build
-            reward = 20
             success = self._handle_build(source_tile, target_tile)
         #print(source_tile.unit == True)
         #print(source_tile.unit.owner == self.game.current_player_index == True)
