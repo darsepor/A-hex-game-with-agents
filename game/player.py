@@ -36,7 +36,7 @@ class Human(Player):
         return False
 
 
-class SimpleAI(Player): #doesn't really work, for testing the game
+class SimpleAI(Player): #doesn't really work well, for testing the game
     def __init__(self, name, color):
         super().__init__(name, color)
 
@@ -197,11 +197,10 @@ class SimpleAI(Player): #doesn't really work, for testing the game
 class ReinforcementAI(Player):
     def __init__(self, name, color):
         super().__init__(name, color)
-        # Reinforcement learning attributes (e.g., model, exploration strategies) can be initialized here
 
     def take_turn(self, game_logic):
 
-        pass
+        pass #This is just for training. Should make a class that loads saved model files.
 
     @property
     def is_ai(self):

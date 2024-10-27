@@ -8,7 +8,7 @@ class Entity:
         self.owner = owner
         self.hitpoints = 1
 
-    def attacked_by_soldier(self):
+    def attacked_by_soldier(self): #Units significantly more vulnerable if in debt. Adds strategic depth.
         self.hitpoints -= 1
         if self.owner.currency < 0:
             self.hitpoints -=2

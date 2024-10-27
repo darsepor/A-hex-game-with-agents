@@ -105,7 +105,7 @@ class CustomGameEnv(gym.Env):
         R = self.game.size * 2 + 1
         terrain_layer = np.full((Q, R), -1, dtype=np.int32)  # Initialize with -1 for unused areas,
                                                              #as it is an injective map from hex grid to observation space
-        units_layer = np.full((Q, R), 0, dtype=np.int32)    # Same for units EDIT: better to just apply a mask to logits i guess
+        units_layer = np.full((Q, R), 0, dtype=np.int32)     #Same for units EDIT: better to just apply a mask to logits i guess
         player = self.game.current_player_index
         for (q, r, s), hex_tile in self.game.atlas.landscape.items():
             grid_q = q + self.game.size

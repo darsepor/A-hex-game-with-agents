@@ -22,9 +22,15 @@ class ActorCriticNetwork(nn.Module):
         self.shared_fc = nn.Linear(64 * input_shape[1] * input_shape[2] + 2, linear)  #Shared layer after convolution
         #print(self.shared_fc)
         self.action_type_head = nn.Linear(linear, num_action_types)
-        self.source_tile_head = nn.ConvTranspose2d(64 + 2 + 16, 1, kernel_size=3, stride=1, padding=1)
-        self.target_tile_head = nn.ConvTranspose2d(64 + 2 + 1 + 16, 1, kernel_size=3, stride=1, padding=1) #we dont give a pathing scaffolding,
-                                                                                             #nor do we mask invalid actions,
+        self.output_grid_head = nn.ConvTranspose2d( #Seems obvious to just use two channels -- if there was a rational reason for
+                                                    #separate source/target heads in the previous implementation I've forgotten it.
+            in_channels=64 + 2 + 16,                #All that matters is this seems to work way better. Note 10/28: run separate actor-critic tests
+            out_channels=2,                         #(previous ones got invalidated as the value head was probably useless due to some bugs before)
+            kernel_size=3,
+            stride=1,
+            padding=1
+        )                                                                                    #we dont give a pathing scaffolding,
+        self.critic_fc = nn.Linear(linear, 1)                                                #nor do we mask invalid actions,
                                                                                              #so logits much be close
                                                                                              #update: had to use maybe too many masks to barely work
                                                                                              #(feels like "might as well write a bunch of if statements"), better approach needed
@@ -38,15 +44,16 @@ class ActorCriticNetwork(nn.Module):
                                                                                              #masking being overhauled is planned next as even now most actions are invalid. 
                                                                                              #Also, fixed a massive oversight of the next_state the
                                                                                              #network sees being from the POV of the opponent.
-        self.critic_fc = nn.Linear(linear, 1)                                                #I'm going off by the proportion of how many games get resolved within a 1000 timesteps--
+                                                                                             #I'm using the proportion of how many games get resolved within a 1000 timesteps 
+                                                                                             #as a preliminary evaluation heurisic
                                                                                              #at convergence and the best performance so far is around 30%. Getting better!
+                                                                                             #update4: 40-50%
         
 
     def forward(self, grid, gold):
         x1 = torch.relu(self.conv1(grid))
         x2 = torch.relu(self.conv2(x1))
-        x3 = torch.relu(self.conv3(x2)) #skip connections or separating actor and critic
-                                        #give unimpressive 20 epochs
+        x3 = torch.relu(self.conv3(x2))
         
         shared_features = x3
         x = self.fc(x3)
@@ -58,16 +65,17 @@ class ActorCriticNetwork(nn.Module):
         
         action_info = action_type_logits.unsqueeze(-1).unsqueeze(-1)
         action_info = action_info.expand(-1, 2, self.input_shape[1], self.input_shape[2])
-        #print(action_info.shape)
-        combined_source_input = torch.cat((shared_features, action_info, x1), dim=1)
-        source_tile_logits = self.source_tile_head(combined_source_input)
         
-        combined_target_input = torch.cat((combined_source_input, source_tile_logits), dim=1)
-        target_tile_logits = self.target_tile_head(combined_target_input)
+        combined_input = torch.cat((shared_features, action_info, x1), dim=1)
+        
+        output_grid = self.output_grid_head(combined_input)
+        
+        source_tile_logits = output_grid[:, 0, :, :]
+        target_tile_logits = output_grid[:, 1, :, :]
         
         value = self.critic_fc(x)
 
-        return action_type_logits, source_tile_logits.squeeze(1), target_tile_logits.squeeze(1), value #further masking of target logits below
+        return action_type_logits, source_tile_logits.squeeze(1), target_tile_logits.squeeze(1), value
 
 
 
@@ -80,20 +88,16 @@ discount_factor = 0.99 #gamma
 trace_decay_rate = 0.6 #lambda
 initialized = False #whether we're not training from scratch
 
-size = 5 #shared linear layer prevents from generalizing in diff sizes 
-         #edit: oh right, 
-         # 
-         # just reuse convolutional layers in the initialization
+size = 5
 
 env = CustomGameEnv(size)
-#print(env.size)
+
 model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
 
 #saved_state_dict = torch.load("size-5-actor_critic_model.pth")
 #model.load_state_dict(saved_state_dict)
 #initialized = True
-eligibility_traces_player1 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
-eligibility_traces_player2 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
+
 
 total_optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay = 0.01)
 
@@ -101,11 +105,11 @@ critic_loss_fn = nn.MSELoss()
 
 victories = 0
 for epoch in range(epochs):
-    #size = size + min(10, epoch // 2)
-    #model.input_shape = (2, size, size)
+    eligibility_traces_player1 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
+    eligibility_traces_player2 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
+
     state = env.reset(size)
     done = False
-    total_reward = 0
     timestep = -1
     print(f"Epoch: {epoch}")
     recent_actions = deque(maxlen=500)
@@ -113,12 +117,14 @@ for epoch in range(epochs):
     last_action = 0
     repeats = 0
     I = 1
+    invalid = 0
     
     while not done:
         timestep +=1
         grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).cuda()
         gold_tensor = torch.tensor(state["gold"]).float().unsqueeze(0).cuda()
         unit_tensor = torch.tensor(state["grid"][1]).float().unsqueeze(0).cuda()
+        land_water_tensor = torch.tensor(state["grid"][0]).float().unsqueeze(0).cuda()
         
         terrain_mask = env.mask.cuda()
         
@@ -132,9 +138,8 @@ for epoch in range(epochs):
         action_type_probs = torch.softmax(action_type_logits, dim=-1)
         action_type_distribution = torch.distributions.Categorical(action_type_probs)
         action_type = action_type_distribution.sample()
-        #if torch.all((unit_tensor <= 0) | (unit_tensor > 7)):
-        #    action_type = torch.tensor(1).cuda() feels wrong. with only 2 action types 
-        # maybe you should get punished if you get the logits wrong -- a fundamental misunderstanding of the game board in a binary way
+        if torch.all((unit_tensor>7) | (unit_tensor<=0)):
+            action_type = torch.tensor(1).cuda()
         
             
         
@@ -161,15 +166,19 @@ for epoch in range(epochs):
         
         
         dist = (torch.abs(q_coords - q_masking) + torch.abs(r_coords - r_masking) + torch.abs((-r_coords - q_coords) - (-r_masking - q_masking))) // 2
-        condition = (dist > 0) & (dist <= 2) 
-        #unit_tensor_cpu = unit_tensor.cpu()
-        if action_type == 1 or unit_tensor.squeeze(0)[q_masking][r_masking].item()==3:
+        dist = dist.cuda()
+        if action_type == 1:
             condition = (dist == 1) 
+        elif unit_tensor.squeeze(0)[q_masking][r_masking].item()==3:
+            condition = (dist == 1) & (((unit_tensor == 0.0) & (land_water_tensor==1)) | (unit_tensor<0))
+        else:
+            condition = (dist>0) & (dist<=2) & (((unit_tensor == 0) & (land_water_tensor==0)) | (unit_tensor<0))
+            
         target_mask = torch.where(condition, torch.tensor(0.0), torch.tensor(float('-inf'))).cuda()
         
         filled_mask = torch.where(unit_tensor > 0, torch.tensor(float('-inf')), torch.tensor(0.0))
+        #masked_target_logits = torch.clamp(target_tile_logits + target_mask  + terrain_mask + filled_mask, min=-1e9)
         masked_target_logits = torch.clamp(target_tile_logits + target_mask  + terrain_mask + filled_mask, min=-1e9)
-
         
         target_tile_probs = torch.softmax((masked_target_logits).view(-1), dim=-1)
         target_tile_distribution = torch.distributions.Categorical(target_tile_probs)
@@ -187,8 +196,11 @@ for epoch in range(epochs):
             last_action = action_type
             repeats = 0
             
-        if repeats > 100:
-            reward = reward -50
+        #if repeats > 100:
+        #    reward = reward -50
+        
+        if reward<0:
+            invalid +=1
         
         next_grid_tensor = torch.tensor(next_state_this_pov["grid"]).float().unsqueeze(0).cuda()
         next_gold_tensor = torch.tensor(next_state_this_pov["gold"]).float().unsqueeze(0).cuda()
@@ -216,7 +228,6 @@ for epoch in range(epochs):
         
         total_loss.backward()
         #print(advantage)
-        
         for name, param in model.named_parameters():
             if param.grad is not None:
                 if timestep % 2 ==0:
@@ -227,7 +238,6 @@ for epoch in range(epochs):
                     eligibility_traces_player2[name] = (discount_factor * trace_decay_rate * eligibility_traces_player2[name] + param.grad) 
 
                     param.grad = eligibility_traces_player2[name]
-        
         
         #if initialized or victories > 4 or (victories > 0 and not done):
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -246,7 +256,7 @@ for epoch in range(epochs):
             sys.stdout.flush
             sys.stdout.write(grid_str)
             sys.stdout.flush()
-            sys.stdout.write(f"\n Step: {timestep}, player: {player}, reward: {reward}, Epoch: {epoch}, action: {(action_type.item(), source_tile_q, source_tile_r, target_tile_q, target_tile_r)}\nvictories: {victories}, value, next_value: {value.item(), next_value.item()}")
+            sys.stdout.write(f"\n Step: {timestep}, player: {player}, reward: {reward}, Epoch: {epoch}, action: {(action_type.item(), source_tile_q, source_tile_r, target_tile_q, target_tile_r)}\nvictories: {victories}, value, next_value: {value.item(), next_value.item()} \ninvalid: {invalid}")
             sys.stdout.flush()
             #sys.stdout.write(new_str)
             #sys.stdout.flush()
