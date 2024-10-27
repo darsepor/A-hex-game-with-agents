@@ -64,11 +64,11 @@ class CustomGameEnv(gym.Env):
         success = False
         reward = 0
         if action_type == 0:  # Move/Attack
-            attacking = target_tile.unit is not None and target_tile.unit.owner != self.game.players[self.game.current_player_index] and isinstance(target_tile.unit, City)
+            attacking = target_tile is not None and target_tile.unit is not None and target_tile.unit.owner != self.game.players[self.game.current_player_index] and isinstance(target_tile.unit, City)
                 
             success = self._handle_move_attack(source_tile, target_tile)
             if attacking and success and target_tile.unit is None:
-                reward = 150
+                reward = 1
 
         elif action_type == 1:  # Build
             success = self._handle_build(source_tile, target_tile)
@@ -86,17 +86,19 @@ class CustomGameEnv(gym.Env):
             #    reward = 10
                 
         elif self.game.game_over:
-            reward +=8000
+            reward +=100
             done = True
         
         #print(self.game.current_player_index)
         #if success:
+        obs_this_pov = self._get_observation()
+        
         self.game.next_turn()
             
         #print(f"gugsdfg {self.game.current_player_index}")
-        obs = self._get_observation()
+        obs_next_pov = self._get_observation()
         
-        return obs, reward, done, {}
+        return obs_this_pov, obs_next_pov, reward, done, {}
     
     def _get_observation(self):
         Q = self.game.size * 2 + 1
@@ -206,9 +208,9 @@ class CustomGameEnv(gym.Env):
                     return True
                 
         else:
-            if target_tile.unit is None and not target_tile.is_water and unit.owner.currency>= Entity.city_cost:
+            if target_tile.unit is None and not target_tile.is_water and unit.owner.currency>= Entity.city_cost* (1.6**(len(unit.owner.cities)-1)):
                 self.game.build_city(source_tile.unit.owner, target_tile)
-                unit.owner.adjust_currency(-Entity.city_cost)
+                unit.owner.adjust_currency(-Entity.city_cost* (1.6**(len(unit.owner.cities)-1)))
                 return True
 
             return False
