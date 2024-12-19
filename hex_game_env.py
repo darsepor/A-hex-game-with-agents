@@ -67,7 +67,7 @@ class CustomGameEnv(gym.Env):
             attacking = target_tile is not None and target_tile.unit is not None and target_tile.unit.owner != self.game.players[self.game.current_player_index] and isinstance(target_tile.unit, City)
                 
             success = self._handle_move_attack(source_tile, target_tile)
-            if attacking and success and target_tile.unit is None:
+            if attacking and success:
                 reward = 1
 
         elif action_type == 1:  # Build
@@ -134,8 +134,8 @@ class CustomGameEnv(gym.Env):
             "gold": gold_values
         }
 
-        return observation        
-    #FIX ME: Abomination
+        return observation
+            
     
     
     def _handle_move_attack(self, source_tile, target_tile):
