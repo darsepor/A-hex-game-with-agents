@@ -77,7 +77,7 @@ class CustomGameEnv(gym.Env):
         
         if not success:
             dist =  abs(source_q - target_q) + abs(source_r - target_r)
-            reward = -10
+            reward = -1
             #if dist > 5:
             #    reward = -20
             #print(source_tile.unit == True)

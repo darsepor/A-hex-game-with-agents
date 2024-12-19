@@ -2,7 +2,7 @@
 class Entity:
     city_cost = 10
     ship_cost = 10
-    soldier_cost = 1
+    soldier_cost = 2
 
     def __init__(self, owner):
         self.owner = owner

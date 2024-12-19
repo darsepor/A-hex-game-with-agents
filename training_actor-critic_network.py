@@ -49,7 +49,8 @@ class ActorCriticNetwork(nn.Module):
                                                                                              #at convergence and the best performance so far is around 30%. Getting better!
                                                                                              #update4: 40-50%
                                                                                              #19/12 Found the time and motivation to come back to this.
-                                                                                             
+                                                                                             #Okay, turns out increasing lambda is all you need. Which is obvious since
+                                                                                             #we have a strategy game here.
         
 
     def forward(self, grid, gold):
@@ -68,7 +69,7 @@ class ActorCriticNetwork(nn.Module):
         action_info = action_type_logits.unsqueeze(-1).unsqueeze(-1)
         action_info = action_info.expand(-1, 2, self.input_shape[1], self.input_shape[2])
         
-        combined_input = torch.cat((shared_features, action_info, x1), dim=1) #A "residual" connection should help with whatever's forgotten due to downsampling
+        combined_input = torch.cat((shared_features, action_info, x1), dim=1) #A "residual" connection should help with whatever's forgotten due to downsampling. Probably should be additive instead.
         
         output_grid = self.output_grid_head(combined_input)
         
@@ -87,7 +88,7 @@ class ActorCriticNetwork(nn.Module):
 epochs = 500
 learning_rate = 0.001
 discount_factor = 0.99 #gamma
-trace_decay_rate = 0.6 #lambda
+trace_decay_rate = 0.9 #lambda
 initialized = False #whether we're not training from scratch
 
 size = 5
@@ -131,7 +132,7 @@ for epoch in range(epochs):
 
         
         action_type_logits, source_tile_logits, target_tile_logits, value = model(grid_tensor, gold_tensor)
-        temperature = 2.0
+       # temperature = 2.0
        
         action_type_logits = action_type_logits
         action_type_probs = torch.softmax(action_type_logits, dim=-1)
@@ -146,9 +147,11 @@ for epoch in range(epochs):
         terrain_mask = env.mask.cuda()
         
         source_mask = torch.where(unit_tensor <= 0, torch.tensor(float('-inf')), torch.tensor(0.0)).cuda()
+        
         if torch.all((unit_tensor>7) | (unit_tensor<=0)):
             action_type = torch.tensor(1).cuda()
-        
+        if torch.tensor(state["gold"][0]).float()<=0:
+            action_type = torch.tensor(0).cuda()
             
         
         
@@ -222,9 +225,8 @@ for epoch in range(epochs):
         
         log_prob_action_type = action_type_distribution.log_prob(action_type)
         log_prob_source_tile = source_tile_distribution.log_prob(source_tile_idx)
-        log_prob_target_tile = target_tile_distribution.log_prob(target_tile_idx) #a bit iffy, though maybe it is better to have a more
-                                                                                  #generalizable logit matrices that work with many board states instead of
-                                                                                  #trying to learn a ton of differing validities for differing states
+        log_prob_target_tile = target_tile_distribution.log_prob(target_tile_idx)
+        
         actor_loss = -(log_prob_action_type + log_prob_source_tile + log_prob_target_tile) * I
         I = discount_factor * I
         
@@ -273,7 +275,7 @@ for epoch in range(epochs):
             
             victories +=1
         
-        elif repeats > 500 or timestep > 1000: #idea for restarting instead of just punishing for repeats is it's stuck in a minimum,
+        elif timestep > 1000: #or repeats> 500: #idea for restarting instead of just punishing for repeats is it's stuck in a minimum,
                                                 #so a new map may get it out of the distribution or whatnot
             done = True
     #if epoch % 10 == 0:
