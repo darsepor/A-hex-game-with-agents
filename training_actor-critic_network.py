@@ -14,21 +14,21 @@ class ActorCriticNetwork(nn.Module):
         self.input_shape = input_shape
         linear = 512
         super(ActorCriticNetwork, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=input_shape[0], out_channels=16, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=input_shape[0], out_channels=32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1)
         self.conv3 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1)
         self.fc = nn.Flatten()
         
         self.shared_fc = nn.Linear(64 * input_shape[1] * input_shape[2] + 2, linear)  #Shared layer after convolution
         #print(self.shared_fc)
         self.action_type_head = nn.Linear(linear, num_action_types)
-        self.output_grid_head = nn.ConvTranspose2d( #Seems obvious to just use two channels -- if there was a rational reason for
-                                                    #separate source/target heads in the previous implementation I've forgotten it.
-            in_channels=64 + 2 + 16,                #All that matters is this seems to work way better. Note 10/28: run separate actor-critic tests
-            out_channels=2,                         #(previous ones got invalidated as the value head was probably useless due to some bugs before)
+        self.output_grid_head = nn.ConvTranspose2d(                                         #Seems obvious to just use two channels -- if there was a rational reason for
+                                                                                            #separate source/target heads in the previous implementation I've forgotten it.
+            in_channels=64 + 2 + 32,                                                        #All that matters is this seems to work way better. Note 10/28: run separate actor-critic network tests
+            out_channels=2,                                                                 #(previous ones got invalidated as the value calculation was probably useless before due to bugs)
             kernel_size=3,
             stride=1,
-            padding=1
+            padding=1                                                                        #Thought process doc:
         )                                                                                    #we dont give a pathing scaffolding,
         self.critic_fc = nn.Linear(linear, 1)                                                #nor do we mask invalid actions,
                                                                                              #so logits much be close
@@ -48,6 +48,8 @@ class ActorCriticNetwork(nn.Module):
                                                                                              #as a preliminary evaluation heurisic
                                                                                              #at convergence and the best performance so far is around 30%. Getting better!
                                                                                              #update4: 40-50%
+                                                                                             #19/12 Found the time and motivation to come back to this.
+                                                                                             
         
 
     def forward(self, grid, gold):
@@ -66,7 +68,7 @@ class ActorCriticNetwork(nn.Module):
         action_info = action_type_logits.unsqueeze(-1).unsqueeze(-1)
         action_info = action_info.expand(-1, 2, self.input_shape[1], self.input_shape[2])
         
-        combined_input = torch.cat((shared_features, action_info, x1), dim=1)
+        combined_input = torch.cat((shared_features, action_info, x1), dim=1) #A "residual" connection should help with whatever's forgotten due to downsampling
         
         output_grid = self.output_grid_head(combined_input)
         
@@ -126,18 +128,24 @@ for epoch in range(epochs):
         unit_tensor = torch.tensor(state["grid"][1]).float().unsqueeze(0).cuda()
         land_water_tensor = torch.tensor(state["grid"][0]).float().unsqueeze(0).cuda()
         
-        terrain_mask = env.mask.cuda()
-        
-        source_mask = torch.where(unit_tensor <= 0, torch.tensor(float('-inf')), torch.tensor(0.0)).cuda()
+
         
         action_type_logits, source_tile_logits, target_tile_logits, value = model(grid_tensor, gold_tensor)
         temperature = 2.0
-        #if (timestep < 1):
-        #    action_type_logits = torch.tensor([5, 0])
+       
         action_type_logits = action_type_logits
         action_type_probs = torch.softmax(action_type_logits, dim=-1)
         action_type_distribution = torch.distributions.Categorical(action_type_probs)
         action_type = action_type_distribution.sample()
+        
+        
+        
+        
+        
+        
+        terrain_mask = env.mask.cuda()
+        
+        source_mask = torch.where(unit_tensor <= 0, torch.tensor(float('-inf')), torch.tensor(0.0)).cuda()
         if torch.all((unit_tensor>7) | (unit_tensor<=0)):
             action_type = torch.tensor(1).cuda()
         
@@ -177,7 +185,6 @@ for epoch in range(epochs):
         target_mask = torch.where(condition, torch.tensor(0.0), torch.tensor(float('-inf'))).cuda()
         
         filled_mask = torch.where(unit_tensor > 0, torch.tensor(float('-inf')), torch.tensor(0.0))
-        #masked_target_logits = torch.clamp(target_tile_logits + target_mask  + terrain_mask + filled_mask, min=-1e9)
         masked_target_logits = torch.clamp(target_tile_logits + target_mask  + terrain_mask + filled_mask, min=-1e9)
         
         target_tile_probs = torch.softmax((masked_target_logits).view(-1), dim=-1)
@@ -265,7 +272,6 @@ for epoch in range(epochs):
         if done:
             
             victories +=1
-            time.sleep(5)
         
         elif repeats > 500 or timestep > 1000: #idea for restarting instead of just punishing for repeats is it's stuck in a minimum,
                                                 #so a new map may get it out of the distribution or whatnot
