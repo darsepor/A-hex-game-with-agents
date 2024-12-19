@@ -39,30 +39,39 @@ we have a strategy game here.
 
 
 '''
+
+class ConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.ln = nn.LayerNorm(out_channels)
+        self.dropout = nn.Dropout2d(0.1)
+
+    def forward(self, x):
+        return self.dropout(torch.relu(self.ln(self.conv(x).permute(0, 2, 3, 1))).permute(0, 3, 1, 2))
+
+
+
 class ActorCriticNetwork(nn.Module):
-    def __init__(self, input_shape, num_action_types):
+    def __init__(self, input_shape, num_action_types, num_conv_blocks=15):
         super().__init__()
         self.input_shape = input_shape
         linear = 512
-        self.dropout = nn.Dropout2d(0.1)
-        self.conv1 = nn.Conv2d(in_channels=input_shape[0], out_channels=32, kernel_size=3, stride=1, padding=1)
-        self.ln1 = nn.LayerNorm(32)
-        self.conv2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1)
-        self.ln2 = nn.LayerNorm(32)
-        self.conv3 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1)
-        self.ln3 = nn.LayerNorm(64)
-        self.conv4 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
-        self.ln4 = nn.LayerNorm(64)
-        self.conv5 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
-        self.ln5 = nn.LayerNorm(64)
+        
+        
+        self.conv_blocks = nn.ModuleList([
+            ConvBlock(num_action_types if i == 0 else 64,
+                      64)
+            for i in range(num_conv_blocks)
+        ])
+        
         self.fc = nn.Flatten()
-
         self.shared_fc = nn.Linear(64 * input_shape[1] * input_shape[2] + 2, linear)
         self.shared_ln = nn.LayerNorm(linear)
         self.action_type_head = nn.Linear(linear, num_action_types)
 
         self.action_info_proj = nn.Conv2d(in_channels=2, out_channels=64, kernel_size=1)
-        self.conv1_proj = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=1)
+        self.conv1_proj = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=1)
 
         self.output_grid_head = nn.Conv2d(
             in_channels=64,
@@ -74,11 +83,13 @@ class ActorCriticNetwork(nn.Module):
         self.critic_fc = nn.Linear(linear, 1)
 
     def forward(self, grid, gold):
-        x1 = self.dropout(torch.relu(self.ln1(self.conv1(grid).permute(0, 2, 3, 1))).permute(0, 3, 1, 2))
-        x2 = self.dropout(torch.relu(self.ln2(self.conv2(x1).permute(0, 2, 3, 1))).permute(0, 3, 1, 2))
-        x3 = self.dropout(torch.relu(self.ln3(self.conv3(x2).permute(0, 2, 3, 1))).permute(0, 3, 1, 2))
-        x4 = self.dropout(torch.relu(self.ln4(self.conv4(x3).permute(0, 2, 3, 1))).permute(0, 3, 1, 2))
-        shared_features = self.dropout(torch.relu(self.ln5(self.conv5(x4).permute(0, 2, 3, 1))).permute(0, 3, 1, 2))
+        
+        
+        x = grid
+        for block in self.conv_blocks:
+            x = block(x)
+
+        shared_features = x
 
         x = self.fc(shared_features)
         x = torch.cat((x, gold), dim=1)
@@ -90,7 +101,7 @@ class ActorCriticNetwork(nn.Module):
         action_info = action_info.expand(-1, 2, self.input_shape[1], self.input_shape[2])
 
         projected_action_info = self.action_info_proj(action_info)
-        projected_x1 = self.conv1_proj(x1)
+        projected_x1 = self.conv1_proj(self.conv_blocks[0](grid))
 
         combined_input = shared_features + projected_action_info + projected_x1
 
@@ -110,7 +121,7 @@ class ActorCriticNetwork(nn.Module):
 epochs = 500
 learning_rate = 0.001
 discount_factor = 0.99 #gamma
-trace_decay_rate = 0.95 #lambda
+trace_decay_rate = 0.9#lambda
 initialized = False #whether we're not training from scratch
 
 size = 5
@@ -118,7 +129,9 @@ size = 5
 env = CustomGameEnv(size)
 
 model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
-
+target_model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
+target_model.load_state_dict(model.state_dict())
+target_model.eval()
 #saved_state_dict = torch.load("size-5-actor_critic_model.pth")
 #model.load_state_dict(saved_state_dict)
 #initialized = True
@@ -143,7 +156,7 @@ for epoch in range(epochs):
     repeats = 0
     I = 1
     invalid = 0
-    
+    target_model.load_state_dict(model.state_dict())
     while not done:
         timestep +=1
         grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).cuda()
@@ -169,12 +182,10 @@ for epoch in range(epochs):
         terrain_mask = env.mask.cuda()
         
         source_mask = torch.where(unit_tensor <= 0, torch.tensor(float('-inf')), torch.tensor(0.0)).cuda()
-        '''
         if torch.all((unit_tensor>7) | (unit_tensor<=0)):
             action_type = torch.tensor(1).cuda()
         if torch.tensor(state["gold"][0]).float()<=0:
             action_type = torch.tensor(0).cuda()
-            '''
         
         
         if(action_type==0):
@@ -238,7 +249,7 @@ for epoch in range(epochs):
         next_gold_tensor = torch.tensor(next_state_this_pov["gold"]).float().unsqueeze(0).cuda()
         
         with torch.no_grad():
-            _, _, _, next_value = model(next_grid_tensor, next_gold_tensor)
+            _, _, _, next_value = target_model(next_grid_tensor, next_gold_tensor)
             td_target = reward + discount_factor * next_value * (1 - int(done))
         
         critic_loss = critic_loss_fn(value, td_target)
@@ -272,6 +283,10 @@ for epoch in range(epochs):
         
         #if initialized or victories > 4 or (victories > 0 and not done):
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+        if timestep % 100 == 0:
+            target_model.load_state_dict(model.state_dict())
+            
             
             
         total_optimizer.step()
