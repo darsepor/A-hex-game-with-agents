@@ -9,8 +9,13 @@ import sys
 import os
 from collections import deque
 import time
+import json
+
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
+
 '''
- #Thought process doc:
+#Thought process doc/reminders:
  
 we dont give a pathing scaffolding, nor do we mask invalid actions, so logits much be close
 update: had to use maybe too many masks to barely work
@@ -33,11 +38,28 @@ at convergence and the best performance so far is around 30%. Getting better!
 
 update4: 40-50%
                                                                                              
-19/12 Found the time and motivation to come back to this.
+19/12
+
+Found the time and motivation to come back to this.
 Okay, turns out increasing lambda is all you need. Which is obvious since
 we have a strategy game here.
 
+20/12
 
+-I've decided to use reward per timestep as an evaluation metric as it is higher
+if the model gets on with it quickly. I suspect there are soft-lock states 
+that mess with training. 
+-Still haven't hardcoded complete masking.
+-I think shorter episodes are preferred as the states become less correlated and
+the end game states aren't that different from beginning ones anyway. There're states where the
+AI is stuck though and does many invalid actions and 
+maybe it's good for the value head to discourage them... No clue.
+-The soft-lock states may be that the AI just spent all their money and there's no path to the enemy
+due to terrain. (Say, it built only soldiers but there's a body of water that needs to be crossed).
+Maybe changing the game logic to include cash-outs would work but that would mess with debt mechanic and unit
+costs. And it seems I've tuned those quite well two months ago because touching them just seems to
+make the game dumber/harder to resolve, or at least seems so from watching the visualization during training.
+-TO DO: Should include terrain in the terminal visualization. Should track invalid actions.
 '''
 
 class ConvBlock(nn.Module):
@@ -118,7 +140,7 @@ class ActorCriticNetwork(nn.Module):
 
 
 
-epochs = 500
+epochs = 50
 learning_rate = 0.001
 discount_factor = 0.99 #gamma
 trace_decay_rate = 0.9#lambda
@@ -130,10 +152,15 @@ env = CustomGameEnv(size)
 
 model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
 target_model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
+
+
+saved_state_dict = torch.load("size-5-actor_critic_model.pth")
+model.load_state_dict(saved_state_dict)
+
+
 target_model.load_state_dict(model.state_dict())
 target_model.eval()
-#saved_state_dict = torch.load("size-5-actor_critic_model.pth")
-#model.load_state_dict(saved_state_dict)
+
 #initialized = True
 
 
@@ -142,10 +169,16 @@ total_optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay 
 critic_loss_fn = nn.MSELoss()
 
 victories = 0
+cumulative_rewards = deque(maxlen = 10)
+cumulative_rewards.append(0)
+rewards_per_timestep = []
+
 for epoch in range(epochs):
+    episode_reward = 0
+    
     eligibility_traces_player1 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
     eligibility_traces_player2 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
-
+    
     state = env.reset(size)
     done = False
     timestep = -1
@@ -232,6 +265,8 @@ for epoch in range(epochs):
         player = env.game.current_player_index
         
         next_state_this_pov, next_state_next_pov, reward, done, _ = env.step((action_type, source_tile_q, source_tile_r, target_tile_q, target_tile_r))
+        episode_reward += reward
+        
         
         if action_type == last_action:
             repeats +=1
@@ -290,6 +325,12 @@ for epoch in range(epochs):
             
             
         total_optimizer.step()
+        
+        tau = 0.005
+        for target_param, local_param in zip(target_model.parameters(), model.parameters()):
+            target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
+            
+            
         if done or (reward > 0 and epoch<100) or timestep % 100 == 0:
             grid = state["grid"][1]
             grid_str = '\n'.join([' '.join(map(str, row)) for row in grid])
@@ -302,7 +343,7 @@ for epoch in range(epochs):
             sys.stdout.flush
             sys.stdout.write(grid_str)
             sys.stdout.flush()
-            sys.stdout.write(f"\n Step: {timestep}, player: {player}, reward: {reward}, Epoch: {epoch}, action: {(action_type.item(), source_tile_q, source_tile_r, target_tile_q, target_tile_r)}\nvictories: {victories}, value, next_value: {value.item(), next_value.item()} \ninvalid: {invalid}")
+            sys.stdout.write(f"\n Step: {timestep}, player: {player}, reward: {reward}, Epoch: {epoch}, action: {(action_type.item(), source_tile_q, source_tile_r, target_tile_q, target_tile_r)}\nvictories: {victories}, value, next_value: {value.item(), next_value.item()} \ninvalid: {invalid}, avg_reward: {sum(cumulative_rewards) / len(cumulative_rewards)}" )
             sys.stdout.flush()
             #sys.stdout.write(new_str)
             #sys.stdout.flush()
@@ -312,12 +353,44 @@ for epoch in range(epochs):
             
             victories +=1
         
-        elif timestep > 1000: #or repeats> 500: #idea for restarting instead of just punishing for repeats is it's stuck in a minimum,
+        elif timestep > 5000:                   #or repeats> 500: #idea for restarting instead of just punishing for repeats is it's stuck in a minimum,
                                                 #so a new map may get it out of the distribution or whatnot
             done = True
-    #if epoch % 10 == 0:
-    #    print(f"Ep Reward: {total_reward}")
+
+
+    #per timestep is more informative.
+    cumulative_rewards.append(episode_reward/timestep)
+    rewards_per_timestep.append(episode_reward/timestep)
 
 torch.save(model.state_dict(), f"size-{size}-actor_critic_model.pth")
 
 print("Training complete!!")
+
+
+
+rewards_file = "rewards.json"
+
+if os.path.exists(rewards_file):
+    with open(rewards_file, "r") as f:
+        all_rewards = json.load(f)
+else:
+    all_rewards = []
+
+
+all_rewards.extend(rewards_per_timestep)
+
+with open(rewards_file, "w") as f:
+    json.dump(all_rewards, f)
+
+plt.figure(figsize=(8, 5))
+plt.plot(list(range(len(all_rewards))), all_rewards, label="Average Reward per episode")
+plt.gca().xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{int(x)}"))
+plt.gca().yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.2f}"))
+plt.xlabel("Episode")
+plt.ylabel("Average Reward per timestep")
+plt.title("Aggregated Rewards Over Multiple Runs")
+plt.legend()
+plt.grid(True)
+plt.savefig("./plots/aggregated_rewards.png")
+plt.show()
+

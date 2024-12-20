@@ -64,11 +64,13 @@ class CustomGameEnv(gym.Env):
         success = False
         reward = 0
         if action_type == 0:  # Move/Attack
-            attacking = target_tile is not None and target_tile.unit is not None and target_tile.unit.owner != self.game.players[self.game.current_player_index] and isinstance(target_tile.unit, City)
-                
+            attacking = target_tile is not None and target_tile.unit is not None and target_tile.unit.owner != self.game.players[self.game.current_player_index]
+            city = attacking and isinstance(target_tile.unit, City)
             success = self._handle_move_attack(source_tile, target_tile)
             if attacking and success:
-                reward = 1
+                reward += 0.1
+                if city:
+                    reward += 1.0
 
         elif action_type == 1:  # Build
             success = self._handle_build(source_tile, target_tile)
@@ -86,7 +88,7 @@ class CustomGameEnv(gym.Env):
             #    reward = 10
                 
         elif self.game.game_over:
-            reward +=100
+            reward +=500
             done = True
         
         #print(self.game.current_player_index)
