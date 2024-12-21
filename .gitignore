@@ -1,3 +1,4 @@
 __pycache__/
 *.py[cod]
 training_actor_and_critic_networks.py
+training_CNN_actor-critic_network_old.py

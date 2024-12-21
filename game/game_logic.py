@@ -71,23 +71,27 @@ class GameLogic:
         return any(neighbor.unit and neighbor.unit.owner == player for neighbor in neighbors)
 
     def build_city(self, player, hex_tile):
-        if hex_tile.unit is None and not hex_tile.is_water:
+        if hex_tile.unit is None and not hex_tile.is_water and player.currency>=Entity.city_cost* (1.6**(len(player.cities)-1)):
             city = City(player)
             hex_tile.unit = city
             player.units.append(city)
             player.cities.append(city)
+            player.adjust_currency(-Entity.city_cost* (1.6**(len(player.cities)-1)))
 
     def place_soldier(self, player, hex_tile):
-        if hex_tile.unit is None and not hex_tile.is_water:
+        if hex_tile.unit is None and not hex_tile.is_water and player.currency >= Entity.soldier_cost:
             soldier = Soldier(player)
             hex_tile.unit = soldier
             player.units.append(soldier)
+            player.adjust_currency(-Entity.soldier_cost)
 
     def place_battleship(self, player, hex_tile):
-        if hex_tile.unit is None and hex_tile.is_water:
+        if hex_tile.unit is None and hex_tile.is_water and player.currency >= Entity.ship_cost:
             ship = BattleShip(player)
             hex_tile.unit = ship
             player.units.append(ship)
+            player.adjust_currency(-Entity.ship_cost)
+
 
     def move_unit(self, unit, from_hex, to_hex):
         from_hex.unit = None

@@ -1,6 +1,6 @@
 
 class Entity:
-    city_cost = 10
+    city_cost = 10 #Cities get exponentially more expensive, see game_logic.py
     ship_cost = 10
     soldier_cost = 2
 
