@@ -17,82 +17,118 @@ from matplotlib.ticker import FuncFormatter
 
 
 
-def sample_apply_masks(action_type_logits, source_tile_logits, target_tile_logits, state, env):
-    # Create tensors from state
-    unit_tensor = torch.tensor(state["grid"][1]).float().unsqueeze(0).cuda()
-    land_water_tensor = torch.tensor(state["grid"][0]).float().unsqueeze(0).cuda()
-    terrain_mask = env.mask.cuda()
+def sample_apply_masks(action_values, source_tile_logits, target_tile_logits, state, env):
+    Q = source_tile_logits.shape[1]
+    R = source_tile_logits.shape[2]
+
+    source_tile_logits_2d = source_tile_logits[0]  
+    target_tile_logits_2d = target_tile_logits[0]
+    action_values_2d = action_values[0]
+
+    index_to_coord = {}
+    for (q, r, s), hex_tile in env.game.atlas.landscape.items():
+        grid_q = q + env.game.size
+        grid_r = r + env.game.size
+        idx = grid_q * R + grid_r
+        index_to_coord[idx] = (q, r, s)
+
+    unit_tensor = torch.tensor(state["grid"][1]).float().cuda()
+    player_index = env.game.current_player_index
+    player = env.game.players[player_index]
+
+    valid_source_mask = torch.full((Q, R), float('-inf')).cuda()
+
+    for (q, r, s), hex_tile in env.game.atlas.landscape.items():
+        grid_q = q + env.game.size
+        grid_r = r + env.game.size
+        
+        if unit_tensor[grid_q, grid_r] <= 0:
+            continue
+
+        source_hex = hex_tile
+        potential_targets = env.game.atlas.neighbors_within_radius(source_hex, 2)
+        has_valid_target = False
+        for tgt in potential_targets:
+            if env.game.can_we_do_that(player, source_hex, tgt, 'move/attack') or env.game.can_we_do_that(player, source_hex, tgt, 'build'):
+                has_valid_target = True
+                break
+        
+        if has_valid_target:
+            valid_source_mask[grid_q, grid_r] = 0.0
+
+    masked_source_logits = source_tile_logits_2d + valid_source_mask
+    source_probs = torch.softmax(masked_source_logits.view(-1), dim=-1)
+    source_dist = torch.distributions.Categorical(source_probs)
     
-    # Sample action type
-    action_type_probs = torch.softmax(action_type_logits, dim=-1)
-    action_type_distribution = torch.distributions.Categorical(action_type_probs)
-    action_type = action_type_distribution.sample()
+    source_idx = source_dist.sample()
+    source_coords = index_to_coord[source_idx.cpu().item()]
+    world_q, world_r, world_s = source_coords
+    source_hex = env.game.atlas.get_hex(world_q, world_r, world_s)
+
+    valid_target_mask = torch.full((Q, R), float('-inf')).cuda()
+    possible_actions_for_target = {}
+
+    neighbors_rad2 = env.game.atlas.neighbors_within_radius(source_hex, 2)
+    for tgt in neighbors_rad2:
+        can_0 = env.game.can_we_do_that(player, source_hex, tgt, 'move/attack')
+        can_1 = env.game.can_we_do_that(player, source_hex, tgt, 'build')
+        if can_0 or can_1:
+            gq = tgt.q + env.game.size
+            gr = tgt.r + env.game.size
+            valid_target_mask[gq, gr] = 0.0
+            valid_set = []
+            if can_0:
+                valid_set.append(0)
+            if can_1:
+                valid_set.append(1)
+            possible_actions_for_target[(gq, gr)] = valid_set
+
+    masked_target_logits = target_tile_logits_2d + valid_target_mask
+    target_probs = torch.softmax(masked_target_logits.view(-1), dim=-1)
+    target_dist = torch.distributions.Categorical(target_probs)
     
-    # Force action type based on conditions
-    if torch.all((unit_tensor>7) | (unit_tensor<=0)):
-        action_type = torch.tensor(1).cuda()
-    if torch.tensor(state["gold"][0]).float()<=0:
-        action_type = torch.tensor(0).cuda()
+    target_idx = target_dist.sample()
+    target_coords = index_to_coord[target_idx.cpu().item()]
+    tw_q, tw_r, tw_s = target_coords
     
-    # Source tile masking
-    source_mask = torch.where(unit_tensor <= 0, torch.tensor(float('-inf')), torch.tensor(0.0)).cuda()
-    if(action_type==0):
-        source_mask = source_mask + torch.where(unit_tensor == 20, torch.tensor(float('-inf')), torch.tensor(0.0))
+    t_q = tw_q + env.game.size
+    t_r = tw_r + env.game.size
+
+    valid_actions = possible_actions_for_target.get((t_q, t_r), [])
+    chosen_action_value = action_values_2d[t_q, t_r]
+    action_prob = torch.sigmoid(chosen_action_value)
+    action_type_dist = torch.distributions.Bernoulli(action_prob)
     
-    masked_source_logits = torch.clamp(source_tile_logits + source_mask, min=-1e9)
-    source_tile_probs = torch.softmax((masked_source_logits).view(-1), dim=-1)
-    source_tile_distribution = torch.distributions.Categorical(source_tile_probs)
-    source_tile_idx = source_tile_distribution.sample()
-    
-    # Convert source tile index to coordinates
-    source_tile_idx_int = source_tile_idx.item()
-    source_tile_q = source_tile_idx_int // env.size - env.game.size
-    source_tile_r = source_tile_idx_int % env.size - env.game.size
-    
-    # Calculate masking coordinates
-    q_masking = source_tile_idx_int // env.size
-    r_masking = source_tile_idx_int % env.size
-    
-    # Create distance mask
-    q_coords, r_coords = torch.meshgrid(torch.arange(env.size), torch.arange(env.size), indexing='ij')
-    dist = (torch.abs(q_coords - q_masking) + torch.abs(r_coords - r_masking) + 
-           torch.abs((-r_coords - q_coords) - (-r_masking - q_masking))) // 2
-    dist = dist.cuda()
-    
-    # Apply different conditions based on action type and unit type
-    if action_type == 1:
-        condition = (dist == 1)
-    elif unit_tensor.squeeze(0)[q_masking][r_masking].item()==3:
-        condition = (dist == 1) & (((unit_tensor == 0.0) & (land_water_tensor==1)) | (unit_tensor<0))
+    if len(valid_actions) == 2:
+        action_type = action_type_dist.sample().long()
+        
+    elif len(valid_actions) == 1:
+        action_type = torch.tensor(valid_actions[0]).cuda().long()
+        
     else:
-        condition = (dist>0) & (dist<=2) & (((unit_tensor == 0) & (land_water_tensor==0)) | (unit_tensor<0))
-    
-    target_mask = torch.where(condition, torch.tensor(0.0), torch.tensor(float('-inf'))).cuda()
-    filled_mask = torch.where(unit_tensor > 0, torch.tensor(float('-inf')), torch.tensor(0.0))
-    masked_target_logits = torch.clamp(target_tile_logits + target_mask + terrain_mask + filled_mask, min=-1e9)
-    
-    target_tile_probs = torch.softmax((masked_target_logits).view(-1), dim=-1)
-    target_tile_distribution = torch.distributions.Categorical(target_tile_probs)
-    target_tile_idx = target_tile_distribution.sample()
-    
-    target_tile_idx_int = target_tile_idx.item()
-    target_tile_q = target_tile_idx_int // env.size - env.game.size
-    target_tile_r = target_tile_idx_int % env.size - env.game.size
+        raise ValueError("No valid actions for target!")
+
+
     
     return {
         'action_type': action_type,
-        'action_type_distribution': action_type_distribution,
-        'source_tile_idx': source_tile_idx,
-        'source_tile_distribution': source_tile_distribution,
-        'target_tile_idx': target_tile_idx,
-        'target_tile_distribution': target_tile_distribution,
+        'action_type_distribution': action_type_dist,  
+        'source_tile_idx': torch.tensor(source_idx).cuda(),
+        'source_tile_distribution': source_dist,
+        'target_tile_idx': torch.tensor(target_idx).cuda(),
+        'target_tile_distribution': target_dist,
         'coordinates': {
-            'source_q': source_tile_q,
-            'source_r': source_tile_r,
-            'target_q': target_tile_q,
-            'target_r': target_tile_r
+            'source_q': world_q,
+            'source_r': world_r,
+            'target_q': tw_q,
+            'target_r': tw_r
         }
     }
+
+
+
+
+
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -111,21 +147,19 @@ class ActorCriticNetwork(nn.Module):
         linear = 512
         
         self.conv_blocks = nn.ModuleList([
-            ConvBlock(num_action_types if i == 0 else 64, 64)
+            ConvBlock(input_shape[0] if i == 0 else 64, 64)
             for i in range(num_conv_blocks)
         ])
         
         self.fc = nn.Flatten()
         self.shared_fc = nn.Linear(64 * input_shape[1] * input_shape[2] + 2, linear)
         self.shared_ln = nn.LayerNorm(linear)
-        self.action_type_head = nn.Linear(linear, num_action_types)
 
-        self.action_info_proj = nn.Conv2d(in_channels=2, out_channels=64, kernel_size=1)
         self.conv1_proj = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=1)
 
         self.output_grid_head = nn.Conv2d(
             in_channels=64,
-            out_channels=2,
+            out_channels=3,
             kernel_size=3,
             stride=1,
             padding=1
@@ -143,24 +177,21 @@ class ActorCriticNetwork(nn.Module):
         x = torch.cat((x, gold), dim=1)
         x = torch.relu(self.shared_ln(self.shared_fc(x)))
 
-        action_type_logits = self.action_type_head(x)
 
-        action_info = action_type_logits.unsqueeze(-1).unsqueeze(-1)
-        action_info = action_info.expand(-1, 2, self.input_shape[1], self.input_shape[2])
 
-        projected_action_info = self.action_info_proj(action_info)
         projected_x1 = self.conv1_proj(self.conv_blocks[0](grid))
 
-        combined_input = shared_features + projected_action_info + projected_x1
+        combined_input = shared_features + projected_x1
 
         output_grid = self.output_grid_head(combined_input)
 
         source_tile_logits = output_grid[:, 0, :, :]
         target_tile_logits = output_grid[:, 1, :, :]
+        action_values = output_grid[:, 2, :, :]
 
         value = self.critic_fc(x)
 
-        return action_type_logits, source_tile_logits, target_tile_logits, value
+        return action_values, source_tile_logits, target_tile_logits, value
 
 def main():
     epochs = 100
@@ -208,9 +239,9 @@ def main():
             grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).cuda()
             gold_tensor = torch.tensor(state["gold"]).float().unsqueeze(0).cuda()
             
-            action_type_logits, source_tile_logits, target_tile_logits, value = model(grid_tensor, gold_tensor)
+            action_values, source_tile_logits, target_tile_logits, value = model(grid_tensor, gold_tensor)
             
-            sampling_results = sample_apply_masks(action_type_logits, source_tile_logits, target_tile_logits, state, env)
+            sampling_results = sample_apply_masks(action_values, source_tile_logits, target_tile_logits, state, env)
             
             action_type = sampling_results['action_type']
             source_tile_idx = sampling_results['source_tile_idx']
@@ -239,7 +270,7 @@ def main():
             critic_loss = critic_loss_fn(value, td_target)
             advantage = (td_target - value).detach()
             
-            log_prob_action_type = sampling_results['action_type_distribution'].log_prob(action_type)
+            log_prob_action_type = sampling_results['action_type_distribution'].log_prob(action_type.float())
             log_prob_source_tile = sampling_results['source_tile_distribution'].log_prob(source_tile_idx)
             log_prob_target_tile = sampling_results['target_tile_distribution'].log_prob(target_tile_idx)
             
@@ -254,10 +285,10 @@ def main():
                 if param.grad is not None:
                     if timestep % 2 == 0:
                         eligibility_traces_player1[name] = (trace_decay_rate * eligibility_traces_player1[name] + param.grad)
-                        param.grad = eligibility_traces_player1[name]
+                        param.grad = eligibility_traces_player1[name] * advantage.item()
                     else:
                         eligibility_traces_player2[name] = (trace_decay_rate * eligibility_traces_player2[name] + param.grad)
-                        param.grad = eligibility_traces_player2[name] * advantage
+                        param.grad = eligibility_traces_player2[name] * advantage.item()
             
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             

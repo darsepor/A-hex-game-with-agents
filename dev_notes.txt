@@ -38,3 +38,9 @@ because touching them just seems to make the game dumber/harder to resolve, or a
 after two hundred steps or so into an episode (and I was wondering why it wasn't training! 80-96% of the gradient steps only considered what the value head was doing...)
 I would guess it has been actually incapable so far of learning longer games, where, say, the players spawned far from each other. Probably most of what caused the softlocks.
 -TO DO: The next state that we use for td_target is not really the next state as it does not account for the action of the opponent. Not sure how to do this without experience replay.
+-The biggest issue right now is that I have implemented action rules/validity in four places: the SimpleAI, GUI, the environment and in training (for masking). Should just be in game logic.
+-This project is way too fun but I'm not sure how much time to dedicate to it. I'd like to try different architectures, expand the game etc. Make visualizations of logits in board states for interpretability.
+
+22/12
+I think once I learn more stuff I could try weirder architectures etc. Make the game more complicated and use a GNN or something.
+-The action type really depends on sources and targets. I'm thinking of having action type also decided by a grid where we put all values through a sigmoid.

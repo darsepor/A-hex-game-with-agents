@@ -201,18 +201,18 @@ class CustomGameEnv(gym.Env):
         if isinstance(unit, City):
             if target_tile.unit is None:
                 if target_tile.is_water and unit.owner.currency >= Entity.ship_cost:
-                    self.game.place_battleship(source_tile.unit.owner, target_tile)
+                    self.game.place_battleship(source_tile.unit.owner,source_tile, target_tile)
                     
                     return True
                 elif not target_tile.is_water and unit.owner.currency >= Entity.soldier_cost:
-                    self.game.place_soldier(source_tile.unit.owner, target_tile)
+                    self.game.place_soldier(source_tile.unit.owner, source_tile, target_tile)
 
                     
                     return True
                 
         else:
             if target_tile.unit is None and not target_tile.is_water and unit.owner.currency>= Entity.city_cost* (1.6**(len(unit.owner.cities)-1)):
-                self.game.build_city(source_tile.unit.owner, target_tile)
+                self.game.build_city(source_tile.unit.owner, source_tile, target_tile)
                 
                 return True
 
