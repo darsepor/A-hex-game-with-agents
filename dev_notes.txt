@@ -28,7 +28,7 @@ AI is stuck though and does many invalid actions, and maybe it's good for the va
 Maybe changing the game logic to include cash-outs would work but that would mess with debt mechanic and unit costs. And it seems I've tuned those quite well two months ago
 because touching them just seems to make the game dumber/harder to resolve, or at least seems so from watching the visualization during training.
 
--TO DO: Should include terrain in the terminal visualization. Should track invalid actions.
+-23/12 EDIT: No longer needed. Invalid actions are masked out. TO DO: Should include terrain in the terminal visualization. Should track invalid actions.
 -TO DO: Use the number of turns to beat (if it is beaten) the hard-coded SimpleAI for testing eval as we do not train on it.
 -Maybe passing through linear layer(s) before the softmax would be any good? Probably not though since the "classes" are still grid-like.
 -The way how output grid and action type heads are related to each and the whole decision-making sequence in the architecture is most likely very flawed.
@@ -44,3 +44,6 @@ I would guess it has been actually incapable so far of learning longer games, wh
 22/12
 I think once I learn more stuff I could try weirder architectures etc. Make the game more complicated and use a GNN or something.
 -The action type really depends on sources and targets. I'm thinking of having action type also decided by a grid where we put all values through a sigmoid.
+
+23/12
+-No longer a separate action type head, different targets have different action types assigned to them. Finished masking.

@@ -16,7 +16,7 @@ class Entity:
     def attacked_by_ship(self):
         self.hitpoints -= 1.5
         if self.owner.currency < 0:
-            self.hitpoints -=1.5
+            self.hitpoints -=3
 
     @property
     def is_city(self):
@@ -42,4 +42,4 @@ class Soldier(Entity):
 class BattleShip(Entity):
     def __init__(self, owner):
         super().__init__(owner)
-        self.hitpoints = 1
+        self.hitpoints = 3

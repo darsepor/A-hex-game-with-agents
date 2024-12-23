@@ -17,6 +17,7 @@ class CustomGameEnv(gym.Env):
         R = self.game.size*2 +1
         #print(self.game.size)
         self.size = Q
+        '''
         self.action_space = spaces.MultiDiscrete([2, Q, R, Q, R])
         self.observation_space = spaces.Dict({
     "grid": spaces.Box(
@@ -34,6 +35,7 @@ class CustomGameEnv(gym.Env):
         shape=(2,),
         dtype=np.int32
     )})
+    '''
         self.mask = torch.full((Q, R), float('-inf'), dtype=torch.float32)
 
         for (q, r, s), hex_tile in self.game.atlas.landscape.items():
@@ -64,40 +66,41 @@ class CustomGameEnv(gym.Env):
         success = False
         reward = 0
         if action_type == 0:  # Move/Attack
-            attacking = target_tile is not None and target_tile.unit is not None and target_tile.unit.owner != self.game.players[self.game.current_player_index]
-            city = attacking and isinstance(target_tile.unit, City)
-            success = self._handle_move_attack(source_tile, target_tile)
-            if attacking and success:
-                reward += 0.1
-                if city:
-                    reward += 1.0
+      
+            if target_tile.unit is not None:
+                if isinstance(target_tile.unit, City):
+                    reward += 1
+                self.game.attack_unit(source_tile.unit, target_tile.unit)
+                
+            else:
+                self.game.move_unit(source_tile.unit, source_tile, target_tile)
+            
 
         elif action_type == 1:  # Build
-            success = self._handle_build(source_tile, target_tile)
-        #print(source_tile.unit == True)
-        #print(source_tile.unit.owner == self.game.current_player_index == True)
+             if isinstance(source_tile.unit, City):
+                    if target_tile.is_water:
+                        self.game.place_battleship(source_tile.unit.owner,source_tile, target_tile)
+                        
+                    else:
+                        self.game.place_soldier(source_tile.unit.owner, source_tile, target_tile)
+
+                        
+                    
+             else:
+                self.game.build_city(source_tile.unit.owner, source_tile, target_tile)
+                    
+
         
-        if not success:
-            dist =  abs(source_q - target_q) + abs(source_r - target_r)
-            reward = -1
-            #if dist > 5:
-            #    reward = -20
-            #print(source_tile.unit == True)
-            #print(source_tile.unit.owner == self.game.current_player_index == True)
-            #if source_tile.unit and source_tile.unit.owner == self.game.current_player_index:
-            #    reward = 10
+
                 
-        elif self.game.game_over:
-            reward +=500
+        if self.game.game_over:
+            reward +=1000
             done = True
-        
-        #print(self.game.current_player_index)
-        #if success:
+
         obs_this_pov = self._get_observation()
         
         self.game.next_turn()
             
-        #print(f"gugsdfg {self.game.current_player_index}")
         obs_next_pov = self._get_observation()
         
         return obs_this_pov, obs_next_pov, reward, done, {}
@@ -139,7 +142,8 @@ class CustomGameEnv(gym.Env):
         return observation
             
     
-    
+    #Unused, but could be useful for debugging
+    '''
     def _handle_move_attack(self, source_tile, target_tile):
         if source_tile is None or target_tile is None or source_tile.unit is None or isinstance(source_tile.unit, City):
             return False
@@ -219,3 +223,4 @@ class CustomGameEnv(gym.Env):
             return False
 
 
+'''

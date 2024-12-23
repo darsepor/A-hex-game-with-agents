@@ -83,7 +83,7 @@ class GameLogic:
                 return False
             if target.is_water and player.currency >= Entity.ship_cost:
                 return True
-            if player.currency >= Entity.soldier_cost:
+            if not target.is_water and player.currency >= Entity.soldier_cost:
                 return True
             else:
                 return False
@@ -188,8 +188,8 @@ class GameLogic:
         #Adjust currency for the current player
         
         current_player.take_turn(self)
-        current_player.adjust_currency(3*len(current_player.cities))
-        current_player.adjust_currency(-len(current_player.units)) #steady state of 1 city sustaining 2 units.
+        current_player.adjust_currency(4*len(current_player.cities))
+        current_player.adjust_currency(-len(current_player.units)) #steady state of 1 city sustaining 3 units.
 
         self.current_player_index = (self.current_player_index + 1) % 2
 

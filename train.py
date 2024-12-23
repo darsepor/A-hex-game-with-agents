@@ -21,6 +21,7 @@ def sample_apply_masks(action_values, source_tile_logits, target_tile_logits, st
     Q = source_tile_logits.shape[1]
     R = source_tile_logits.shape[2]
 
+    
     source_tile_logits_2d = source_tile_logits[0]  
     target_tile_logits_2d = target_tile_logits[0]
     action_values_2d = action_values[0]
@@ -39,6 +40,7 @@ def sample_apply_masks(action_values, source_tile_logits, target_tile_logits, st
     valid_source_mask = torch.full((Q, R), float('-inf')).cuda()
 
     for (q, r, s), hex_tile in env.game.atlas.landscape.items():
+        
         grid_q = q + env.game.size
         grid_r = r + env.game.size
         
@@ -57,6 +59,10 @@ def sample_apply_masks(action_values, source_tile_logits, target_tile_logits, st
             valid_source_mask[grid_q, grid_r] = 0.0
 
     masked_source_logits = source_tile_logits_2d + valid_source_mask
+    
+    if torch.all(masked_source_logits == float('-inf')):
+        return None
+                    
     source_probs = torch.softmax(masked_source_logits.view(-1), dim=-1)
     source_dist = torch.distributions.Categorical(source_probs)
     
@@ -83,7 +89,7 @@ def sample_apply_masks(action_values, source_tile_logits, target_tile_logits, st
                 valid_set.append(1)
             possible_actions_for_target[(gq, gr)] = valid_set
 
-    masked_target_logits = target_tile_logits_2d + valid_target_mask
+    masked_target_logits = target_tile_logits_2d + valid_target_mask + env.mask.cuda()
     target_probs = torch.softmax(masked_target_logits.view(-1), dim=-1)
     target_dist = torch.distributions.Categorical(target_probs)
     
@@ -113,9 +119,9 @@ def sample_apply_masks(action_values, source_tile_logits, target_tile_logits, st
     return {
         'action_type': action_type,
         'action_type_distribution': action_type_dist,  
-        'source_tile_idx': torch.tensor(source_idx).cuda(),
+        'source_tile_idx': source_idx,
         'source_tile_distribution': source_dist,
-        'target_tile_idx': torch.tensor(target_idx).cuda(),
+        'target_tile_idx': target_idx,
         'target_tile_distribution': target_dist,
         'coordinates': {
             'source_q': world_q,
@@ -147,7 +153,7 @@ class ActorCriticNetwork(nn.Module):
         linear = 512
         
         self.conv_blocks = nn.ModuleList([
-            ConvBlock(input_shape[0] if i == 0 else 64, 64)
+            ConvBlock(input_shape[0]+2 if i == 0 else 64, 64)
             for i in range(num_conv_blocks)
         ])
         
@@ -167,8 +173,15 @@ class ActorCriticNetwork(nn.Module):
         self.critic_fc = nn.Linear(linear, 1)
 
     def forward(self, grid, gold):
-        x = grid
-        for block in self.conv_blocks:
+        gold_grid = gold.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, grid.size(2), grid.size(3))
+        x = torch.cat((grid, gold_grid), dim=1)
+        
+        
+        x = self.conv_blocks[0](x)
+        projected_x1 = self.conv1_proj(x)
+        
+        
+        for block in self.conv_blocks[1:]:
             x = block(x)
 
         shared_features = x
@@ -179,7 +192,6 @@ class ActorCriticNetwork(nn.Module):
 
 
 
-        projected_x1 = self.conv1_proj(self.conv_blocks[0](grid))
 
         combined_input = shared_features + projected_x1
 
@@ -243,6 +255,10 @@ def main():
             
             sampling_results = sample_apply_masks(action_values, source_tile_logits, target_tile_logits, state, env)
             
+            if sampling_results is None: #if there are no valid actions, I guess the game breaks - a sort of a draw?
+                break
+            
+            
             action_type = sampling_results['action_type']
             source_tile_idx = sampling_results['source_tile_idx']
             target_tile_idx = sampling_results['target_tile_idx']
@@ -253,11 +269,12 @@ def main():
             next_state_this_pov, next_state_next_pov, reward, done, _ = env.step(                               #No good!
                 (action_type, coords['source_q'], coords['source_r'], coords['target_q'], coords['target_r']))
             
+            
             episode_reward += reward
             
 
             
-            if reward < 0:
+            if reward < 0: #invalid count is unused, if an invalid action is taken, the game breaks as it should be masked out.
                 invalid += 1
             
             next_grid_tensor = torch.tensor(next_state_this_pov["grid"]).float().unsqueeze(0).cuda()
@@ -301,7 +318,7 @@ def main():
                 target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
                 
             
-            if done or (reward > 0 and epoch < 100) or timestep % 100 == 0:
+            if done or reward>0 or timestep % 100 == 0:
                 grid = state["grid"][1]
                 grid_str = '\n'.join([' '.join(map(str, row)) for row in grid])
                 os.system('cls')
@@ -310,16 +327,16 @@ def main():
                 sys.stdout.write(grid_str)
                 sys.stdout.flush()
                 sys.stdout.write(f"\n Step: {timestep}, player: {player}, reward: {reward}, Epoch: {epoch}, " + 
-                               f"action: {(action_type.item(), coords['source_q'], coords['source_r'], coords['target_q'], coords['target_r'])}\n" +
+                               f"action: {(action_type.item(), coords['source_q'] + env.game.size, coords['source_r'] + env.game.size, coords['target_q'] + env.game.size, coords['target_r'] + env.game.size)}\n" +
                                f"victories: {victories}, value, next_value: {value.item(), next_value.item()} \n" +
-                               f"invalid: {invalid}, avg_reward: {sum(cumulative_rewards) / len(cumulative_rewards)}")
+                               f"avg_reward_10_epoch: {sum(cumulative_rewards) / len(cumulative_rewards)}")
                 sys.stdout.flush()
             
             state = next_state_next_pov
             
             if done:
                 victories += 1
-            elif timestep > 5000:
+            elif timestep > 1000:
                 done = True
         
         cumulative_rewards.append(episode_reward/timestep)
