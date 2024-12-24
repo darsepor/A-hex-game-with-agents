@@ -2,14 +2,14 @@ import gym
 from gym import spaces
 import numpy as np
 from game.game_logic import GameLogic
-from game.player import ReinforcementAI
+from game.player import ReinforcementAITraining
 from game.entity import BattleShip, City, Soldier, Entity
 import torch
 
 class CustomGameEnv(gym.Env):
-    def __init__(self, size, mode='reinforcementai_vs_reinforcementai'):
+    def __init__(self, size, players = [ReinforcementAITraining, ReinforcementAITraining]):
         super(CustomGameEnv, self).__init__()
-        self.game = GameLogic(mode=mode, size=size)
+        self.game = GameLogic(players = players, size=size)
 
         #Action space: action_type(move/attack or build), source_q, source_r, target_q, target_r
         
@@ -46,7 +46,7 @@ class CustomGameEnv(gym.Env):
         
         
     def reset(self, new_size):
-        self.game = GameLogic(size=new_size, mode='reinforcementai_vs_reinforcementai')
+        self.game = GameLogic(size=new_size, players=[ReinforcementAITraining, ReinforcementAITraining])
         self.mask = torch.full((new_size*2+1, new_size*2+1), float('-inf'), dtype=torch.float32)
         for (q, r, s), hex_tile in self.game.atlas.landscape.items():
             grid_q = q + self.game.size
@@ -94,7 +94,7 @@ class CustomGameEnv(gym.Env):
 
                 
         if self.game.game_over:
-            reward +=1000
+            reward +=50
             done = True
 
         obs_this_pov = self._get_observation()

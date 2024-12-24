@@ -194,7 +194,7 @@ class SimpleAI(Player): #doesn't really work well, for testing the game
 
 
 
-class ReinforcementAI(Player):
+class ReinforcementAITraining(Player):
     def __init__(self, name, color):
         super().__init__(name, color)
 

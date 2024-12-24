@@ -47,3 +47,10 @@ I think once I learn more stuff I could try weirder architectures etc. Make the 
 
 23/12
 -No longer a separate action type head, different targets have different action types assigned to them. Finished masking.
+
+24/12
+-Even with masks the training results are seemingly unimpressive. Could just be self-play and equal opponents though. Or the game
+design is bad and it takes too long. Next step is to implement an eval against a hard-coded AI.
+-I'm going to make the game map slightly smaller, to have it conclude faster. Also, I'm considering changing the rules such that you
+can move multiple pieces per turn. Would simplify the network a lot for the very least.
+-I'm thinking of trying a new training approach where the model plays against an older version of itself rather than itself. Should stabilize.
