@@ -143,7 +143,7 @@ def main():
     learning_rate = 0.001
     discount_factor = 0.98 #gamma
     trace_decay_rate = 0.9 #lambda
-    #initialized = False #whether we're not training from scratch
+    initialized = False #whether we're not training from scratch
     size = 4
 
     env = CustomGameEnv(size)
@@ -151,9 +151,9 @@ def main():
     
     model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
     target_model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
-    
-    #saved_state_dict = torch.load(f"size-{size}-actor_critic_model.pth")
-    #model.load_state_dict(saved_state_dict)
+    if initialized:
+        saved_state_dict = torch.load(f"size-{size}-actor_critic_model.pth")
+        model.load_state_dict(saved_state_dict)
     
     target_model.load_state_dict(model.state_dict())
     target_model.eval()
@@ -259,9 +259,14 @@ def main():
                 target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
                 
             
-            if True or done or reward>0 or timestep % 100 == 0:
-                grid = state["grid"][1]
-                grid_str = '\n'.join([' '.join(map(str, row)) for row in grid])
+            if done or reward>0 or timestep % 100 == 0:
+                grid_0 = state["grid"][0]
+                grid_1 = state["grid"][1]
+    
+                grid_str = '\n'.join([' '.join(['🟦' if grid_0[i][j] == 0 and
+                                                cell == 0 else '🟩' if grid_0[i][j] == 1 and 
+                                                cell == 0 else '⬛' if grid_0[i][j] == -1 and 
+                                                cell == 0 else str(cell) for j, cell in enumerate(row)]) for i, row in enumerate(grid_1)])                
                 os.system('cls')
                 sys.stdout.write(str(state["gold"]) + "\n")
                 sys.stdout.flush()
@@ -277,7 +282,7 @@ def main():
             
             if done:
                 victories += 1
-            elif timestep > 500:
+            elif timestep > 1000:
                 done = True
         
         cumulative_rewards.append(episode_reward/timestep)

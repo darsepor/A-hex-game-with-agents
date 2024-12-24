@@ -68,6 +68,7 @@ class CustomGameEnv(gym.Env):
         if action_type == 0:  # Move/Attack
       
             if target_tile.unit is not None:
+                reward +=0.2
                 if isinstance(target_tile.unit, City):
                     reward += 1
                 self.game.attack_unit(source_tile.unit, target_tile.unit)
@@ -94,7 +95,7 @@ class CustomGameEnv(gym.Env):
 
                 
         if self.game.game_over:
-            reward +=50
+            reward +=100
             done = True
 
         obs_this_pov = self._get_observation()
