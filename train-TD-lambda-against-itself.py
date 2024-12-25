@@ -139,11 +139,11 @@ def sample_apply_masks(action_values, source_tile_logits, target_tile_logits, st
 
 
 def main():
-    epochs = 100
+    epochs = 1000
     learning_rate = 0.001
     discount_factor = 0.98 #gamma
     trace_decay_rate = 0.9 #lambda
-    initialized = False #whether we're not training from scratch
+    initialized = True #whether we're not training from scratch
     size = 4
 
     env = CustomGameEnv(size)
@@ -158,7 +158,7 @@ def main():
     target_model.load_state_dict(model.state_dict())
     target_model.eval()
 
-    total_optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    total_optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=0.01)
     critic_loss_fn = nn.MSELoss()
 
     victories = 0
@@ -178,7 +178,7 @@ def main():
         
         invalid = 0
         
-        
+        target_model.load_state_dict(model.state_dict())
         while not done:
             timestep += 1
             grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).cuda()
@@ -228,7 +228,7 @@ def main():
             
             actor_loss = -(log_prob_action_type + log_prob_source_tile + log_prob_target_tile) 
             
-            total_loss = actor_loss + critic_loss
+            total_loss = actor_loss * advantage + critic_loss
             
             total_optimizer.zero_grad()
             total_loss.backward()
@@ -314,7 +314,7 @@ def main():
     plt.title("Aggregated Rewards Over Multiple Runs")
     plt.legend()
     plt.grid(True)
-    plt.savefig("./plots/size-{size}-aggregated_rewards.png")
+    plt.savefig(f"./plots/size-{size}-aggregated_rewards.png")
     plt.show()
     
     

@@ -6,7 +6,7 @@ from game.entity import Entity, Soldier, City, BattleShip
 class Player(ABC):
     def __init__(self, name, color):
         self.name = name
-        self.currency = 20
+        self.currency = 50
         self.units = []
         self.cities = []
         self.color = color

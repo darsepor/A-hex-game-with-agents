@@ -42,7 +42,6 @@ I would guess it has been actually incapable so far of learning longer games, wh
 -This project is way too fun but I'm not sure how much time to dedicate to it. I'd like to try different architectures, expand the game etc. Make visualizations of logits in board states for interpretability.
 
 22/12
-I think once I learn more stuff I could try weirder architectures etc. Make the game more complicated and use a GNN or something.
 -The action type really depends on sources and targets. I'm thinking of having action type also decided by a grid where we put all values through a sigmoid.
 
 23/12
@@ -53,4 +52,11 @@ I think once I learn more stuff I could try weirder architectures etc. Make the 
 design is bad and it takes too long. Next step is to implement an eval against a hard-coded AI.
 -I'm going to make the game map slightly smaller, to have it conclude faster. Also, I'm considering changing the rules such that you
 can move multiple pieces per turn. Would simplify the network a lot for the very least.
--I'm thinking of trying a new training approach where the model plays against an older version of itself rather than itself. Should stabilize.
+-TO DO: I'm thinking of trying a new training approach where the model plays against an older version of itself rather than itself. Should stabilize.
+-After visualization, I see my guess about soft-locks was correct. The players can't reach each other due to terrain and running out of money.
+-TO DO: Eligibility traces and advantage do not interact as they should.
+-Gotta fix soft locks. An idea is pay gold to turn an empty tile into land/water (ships can build canals and soldiers bridges). Or
+the unit could sacrifice itself in order to change tile, to account for debt states.
+-Okay, but there is no good reason why it should fail to learn to get over the river. And to make a plan. And not just spam as much units
+as soon as possible. 
+-I suspect the current residual connection just makes the network not use most layers. Will adjust.
