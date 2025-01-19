@@ -12,7 +12,7 @@ import time
 import json
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
-from CNNAC import ActorCriticNetwork
+from networks import ActorCriticNetwork, ResActorCriticNetwork
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -20,18 +20,18 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def main():
-    epochs = 10
+    epochs = 100
     learning_rate = 0.001
     discount_factor = 0.98 #gamma
     trace_decay_rate = 0.9 #lambda
-    initialized = True #whether we're not training from scratch
-    size = 4
+    initialized = False #whether we're not training from scratch
+    size = 5
 
     env = CustomGameEnv(size)
     
     
-    model = ActorCriticNetwork((2, env.size, env.size), 2).to(device)
-    target_model = ActorCriticNetwork((2, env.size, env.size), 2).to(device)
+    model = ResActorCriticNetwork((2, env.size, env.size), 2).to(device)
+    target_model = ResActorCriticNetwork((2, env.size, env.size), 2).to(device)
     if initialized:
         saved_state_dict = torch.load(f"size-{size}-actor_critic_model.pth")
         model.load_state_dict(saved_state_dict)
@@ -163,7 +163,7 @@ def main():
             
             if done:
                 victories += 1
-            elif timestep > 1000:
+            elif timestep > 500:
                 done = True
         
         cumulative_rewards.append(episode_reward/timestep)

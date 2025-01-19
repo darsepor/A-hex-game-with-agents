@@ -3,7 +3,7 @@ import random
 from game.entity import Entity, Soldier, City, BattleShip
 import torch
 import numpy as np
-from CNNAC import ActorCriticNetwork
+from networks import ActorCriticNetwork, ResActorCriticNetwork
 import os
 import sys
 
@@ -207,11 +207,11 @@ class ReinforcementAITraining(Player):
     def is_ai(self):
         return True
     
-class CNNACAI(Player): #This is for evaluation
-    def __init__(self, name, color, size=4, device='cuda'):
+class ANNAI(Player): #This is for evaluation
+    def __init__(self, name, color, size=5, device='cuda'):
         super().__init__(name, color)
         self.device = device
-        self.model = ActorCriticNetwork((2, size*2+1, size*2+1), 2).to(self.device)
+        self.model = ResActorCriticNetwork((2, size*2+1, size*2+1), 2).to(self.device)
         self.model.load_state_dict(torch.load(f"size-{size}-actor_critic_model.pth", map_location=self.device))
         self.model.eval()
         
