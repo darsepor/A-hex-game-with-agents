@@ -19,6 +19,7 @@ class GameLogic:
         self.init_map()
         self.place_initial_cities()
         self.game_over = False
+        self.steps = 0
 
 
 
@@ -115,10 +116,11 @@ class GameLogic:
             
         
             
-
+    def dynamic_city_cost(self, player):
+        return Entity.city_cost * (1.6 ** (len(player.cities) - 1))
 
     def build_city(self, player, source, target):
-        if not self.can_we_do_that(player, source, target, 'build'):
+        if isinstance(source.unit, City) or not self.can_we_do_that(player, source, target, 'build'):
             raise ValueError("Cannot build city: Conditions not met.")
         
         city = City(player)
@@ -129,7 +131,7 @@ class GameLogic:
         
 
     def place_soldier(self, player, source, target):
-        if not self.can_we_do_that(player, source, target, 'build'):
+        if not isinstance(source.unit, City) or not self.can_we_do_that(player, source, target, 'build'):
             raise ValueError("Cannot place soldier: Conditions not met.")
         
         soldier = Soldier(player)
@@ -138,7 +140,7 @@ class GameLogic:
         player.adjust_currency(-Entity.soldier_cost)
 
     def place_battleship(self, player, source, target):
-        if not self.can_we_do_that(player, source, target, 'build'):
+        if not isinstance(source.unit, City) or not self.can_we_do_that(player, source, target, 'build'):
             raise ValueError("Cannot place battleship: Conditions not met.")
             
         ship = BattleShip(player)
@@ -190,6 +192,7 @@ class GameLogic:
         current_player.adjust_currency(-len(current_player.units)) #steady state of 1 city sustaining 2 units.
 
         self.current_player_index = (self.current_player_index + 1) % 2
+        self.steps += 1
 
 
     def distance(self, a, b):
@@ -197,15 +200,21 @@ class GameLogic:
     
     def find_path(self, start_hex, goal_hex, unit=None):
         from collections import deque
-
+        destination = None
         frontier = deque()
         frontier.append(start_hex)
         came_from = {}
         came_from[start_hex] = None
-
+        area = []
+        if isinstance(unit, Soldier):
+            area.extend(self.atlas.neighbors(goal_hex))
+        elif isinstance(unit, BattleShip):
+            area.extend(self.atlas.neighbors_within_radius(goal_hex, 2))
+            
         while frontier:
             current = frontier.popleft()
-            if current == goal_hex:
+            if current in area:
+                destination = current
                 break
             for neighbor in self.atlas.neighbors(current):
                 if neighbor not in came_from:
@@ -214,12 +223,12 @@ class GameLogic:
                         continue
                     if isinstance(unit, BattleShip) and not neighbor.is_water:
                         continue
-                    if neighbor.unit is None or neighbor == goal_hex:
+                    if neighbor.unit is None:
                         frontier.append(neighbor)
                         came_from[neighbor] = current
 
         path = []
-        current = goal_hex
+        current = destination
         while current != start_hex:
             path.append(current)
             current = came_from.get(current)

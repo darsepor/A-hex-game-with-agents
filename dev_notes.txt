@@ -67,5 +67,8 @@ residual blocks and slapping on a transformer encoder at the end for global asso
 -If not, MCTS it is.
 
 19/01
-Coming back!! 
-TO DO: A class that has the neural network play the game has been implemented, however the sampling is not greedy.
+-Coming back!! 
+-I really need to finish this
+-Okay, doing an eval. The network playing against itself with greedy sampling just gets stuck in a loop doing nothing. It seems like it hasn't trained to play well at all and would just end up doing things
+by randomly following things where immediate reward is expected. I could sample from a softmax in eval as well tho, but that would be cheating.Best action should be best action. Let's see how it fares against SimpleAI.
+-Ran an eval against SimpleAI, the SimpleAI wins 76% of the games, 18% being draws, and the CNN winning 6%. RIP

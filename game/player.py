@@ -4,7 +4,8 @@ from game.entity import Entity, Soldier, City, BattleShip
 import torch
 import numpy as np
 from CNNAC import ActorCriticNetwork
-
+import os
+import sys
 
 class Player(ABC):
     def __init__(self, name, color):
@@ -65,60 +66,57 @@ class SimpleAI(Player): #doesn't really work well, for testing the game
                                 None)
         
 
-        if self.currency >= Entity.city_cost:
+        if self.currency >= game_logic.dynamic_city_cost(self):
             chance = random.random()
-            if chance <= 0.5 and self.currency >= Entity.soldier_cost:
+            if chance <= 0.3 and self.currency >= Entity.soldier_cost:
                 soldier_candidates = []
                 for city_hex in cities:
                     neighbors = game_logic.atlas.neighbors(city_hex)
                     for neighbor in neighbors:
                         if neighbor.unit is None and not neighbor.is_water:
-                            soldier_candidates.append(neighbor)
+                            soldier_candidates.append((city_hex, neighbor))
                 if soldier_candidates:
-                    location = min(soldier_candidates,
-                                   key=lambda hex_tile: game_logic.atlas.distance(hex_tile, first_unit_human))
-                    game_logic.place_soldier(self, location)
-                    self.adjust_currency(-Entity.soldier_cost)
+                    source, target = min(soldier_candidates,
+                                   key=lambda hex_tile: game_logic.atlas.distance(hex_tile[1], first_unit_human))
+                    game_logic.place_soldier(self, source, target)
                     return
-            elif chance <= 0.8 and self.currency >= Entity.ship_cost:
+            if chance <= 0.6 and self.currency >= Entity.ship_cost:
                 ship_candidates = []
                 for city_hex in cities:
                     neighbors = game_logic.atlas.neighbors(city_hex)
                     for neighbor in neighbors:
                         if neighbor.unit is None and neighbor.is_water:
-                            ship_candidates.append(neighbor)
+                            ship_candidates.append((city_hex, neighbor))
                 if ship_candidates:
-                    location = min(ship_candidates,
-                                   key=lambda hex_tile: game_logic.atlas.distance(hex_tile, first_unit_human))
-                    game_logic.place_battleship(self, location)
-                    self.adjust_currency(-Entity.ship_cost)
+                    source, target = min(ship_candidates,
+                                   key=lambda hex_tile: game_logic.atlas.distance(hex_tile[1], first_unit_human))
+                    game_logic.place_battleship(self, source, target)
                     return
-            else:
-                city_candidates = []
-                for possession in possessions:
-                    neighbors = game_logic.atlas.neighbors(possession)
-                    for neighbor in neighbors:
-                        if neighbor.unit is None and not neighbor.is_water:
-                            city_candidates.append(neighbor)
-                if city_candidates:
-                    location = min(city_candidates,
-                                   key=lambda hex_tile: game_logic.atlas.distance(hex_tile, first_unit_human))
-                    game_logic.build_city(self, location)
-                    self.adjust_currency(-Entity.city_cost)
-                    return
+                
+            city_candidates = []
+            for possession in soldiers.union(ships):
+                neighbors = game_logic.atlas.neighbors(possession)
+                for neighbor in neighbors:
+                    if neighbor.unit is None and not neighbor.is_water:
+                        city_candidates.append((possession, neighbor))
+            if city_candidates:
+                source, target = min(city_candidates,
+                                key=lambda hex_tile: game_logic.atlas.distance(hex_tile[1], first_unit_human))
+                game_logic.build_city(self, source, target)
+                return
         else:
             human_possessions = [hex_tile for hex_tile in game_logic.atlas.landscape.values()
                                  if hex_tile.unit is not None and hex_tile.unit.owner == opponent]
-            for movable_hex in possessions:
+            for movable_hex in soldiers.union(ships):
                 unit = movable_hex.unit
                 if isinstance(unit, City):
                     continue
-                target_hex = min(human_possessions,
-                                   key=lambda hex_tile: game_logic.atlas.distance(hex_tile, movable_hex))
-                if target_hex is not None:
-                    success = self.move_unit_towards_target(unit, movable_hex, target_hex, game_logic)
-                    if success:
-                        return
+                for target_hex in human_possessions:                          #min(human_possessions,
+                                                                              #key=lambda hex_tile: game_logic.atlas.distance(hex_tile, movable_hex))
+                    if target_hex is not None:
+                        success = self.move_unit_towards_target(unit, movable_hex, target_hex, game_logic)
+                        if success:
+                            return
 
     def soldiers_ships_cities(self, hex_tiles):
         soldiers = set()
@@ -210,7 +208,7 @@ class ReinforcementAITraining(Player):
         return True
     
 class CNNACAI(Player): #This is for evaluation
-    def __init__(self, name, color, size=4, device='cpu'):
+    def __init__(self, name, color, size=4, device='cuda'):
         super().__init__(name, color)
         self.device = device
         self.model = ActorCriticNetwork((2, size*2+1, size*2+1), 2).to(self.device)
@@ -233,6 +231,7 @@ class CNNACAI(Player): #This is for evaluation
         action_type = sampling_results['action_type'].item()
         coords = sampling_results['coordinates']
         neural_network_step((action_type, coords['source_q'], coords['source_r'], coords['target_q'], coords['target_r']), game_logic)
+
         
         
         
@@ -274,7 +273,21 @@ def get_observation(game):
         "grid": np.array([terrain_layer, units_layer], dtype=np.int32),
         "gold": gold_values
     }
+    grid_0 = observation["grid"][0]
+    grid_1 = observation["grid"][1]
 
+    grid_str = '\n'.join([' '.join(['🟦' if grid_0[i][j] == 0 and
+                                    cell == 0 else '🟩' if grid_0[i][j] == 1 and 
+                                    cell == 0 else '⬛' if grid_0[i][j] == -1 and 
+                                    cell == 0 else str(cell) for j, cell in enumerate(row)]) for i, row in enumerate(grid_1)])                
+    os.system('cls')
+    sys.stdout.write(str(observation["gold"]) + "\n")
+    sys.stdout.flush()
+    sys.stdout.write(grid_str)
+    sys.stdout.flush()
+    
+    
+    
     return observation
         
 
