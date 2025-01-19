@@ -1,7 +1,10 @@
-
 from abc import ABC, abstractmethod
 import random
 from game.entity import Entity, Soldier, City, BattleShip
+import torch
+import numpy as np
+from CNNAC import ActorCriticNetwork
+
 
 class Player(ABC):
     def __init__(self, name, color):
@@ -205,3 +208,210 @@ class ReinforcementAITraining(Player):
     @property
     def is_ai(self):
         return True
+    
+class CNNACAI(Player): #This is for evaluation
+    def __init__(self, name, color, size=4, device='cpu'):
+        super().__init__(name, color)
+        self.device = device
+        self.model = ActorCriticNetwork((2, size*2+1, size*2+1), 2).to(self.device)
+        self.model.load_state_dict(torch.load(f"size-{size}-actor_critic_model.pth", map_location=self.device))
+        self.model.eval()
+        
+        
+    def take_turn(self, game_logic):
+        if game_logic.game_over:
+            return
+        
+        state = get_observation(game_logic)
+        grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).to(self.device)
+        gold_tensor = torch.tensor(state["gold"]).float().unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            action_values, source_tile_logits, target_tile_logits, _ = self.model(grid_tensor, gold_tensor)
+        sampling_results = greedy_apply_masks(game_logic, action_values, source_tile_logits, target_tile_logits, state, self.device)
+        if sampling_results is None:
+            return
+        action_type = sampling_results['action_type'].item()
+        coords = sampling_results['coordinates']
+        neural_network_step((action_type, coords['source_q'], coords['source_r'], coords['target_q'], coords['target_r']), game_logic)
+        
+        
+        
+        
+        
+        
+        
+#This isn't good but the environment class was build pretty much for training only and I'm not sure how to unentangle it all. Furthermore, we want to do greedy sampling.
+def get_observation(game):
+    Q = game.size * 2 + 1
+    R = game.size * 2 + 1
+    terrain_layer = np.full((Q, R), -1, dtype=np.int32)  # Initialize with -1 for unused areas,
+                                                            #as it is an injective map from hex grid to observation space
+    units_layer = np.full((Q, R), 0, dtype=np.int32)     #Same for units EDIT: better to just apply a mask to logits i guess
+    player = game.current_player_index
+    for (q, r, s), hex_tile in game.atlas.landscape.items():
+        grid_q = q + game.size
+        grid_r = r + game.size
+
+        if hex_tile.is_water:
+            terrain_layer[grid_q, grid_r] = 0
+        else:
+            terrain_layer[grid_q, grid_r] = 1
+
+        if hex_tile.unit is None:
+            units_layer[grid_q, grid_r] = 0
+        else:
+            unit = hex_tile.unit
+            if isinstance(unit, Soldier):
+                units_layer[grid_q, grid_r] = 3 if unit.owner == game.players[player] else -3
+            elif isinstance(unit, BattleShip):
+                units_layer[grid_q, grid_r] = 7 if unit.owner == game.players[player] else -7
+            elif isinstance(unit, City):
+                units_layer[grid_q, grid_r] = 20 if unit.owner == game.players[player] else -20
+    
+    gold_values = np.array([game.players[player].currency, game.players[(player + 1) % 2].currency], dtype=np.int32)
+
+    observation = {
+        "grid": np.array([terrain_layer, units_layer], dtype=np.int32),
+        "gold": gold_values
+    }
+
+    return observation
+        
+
+
+
+def greedy_apply_masks(game, action_values, source_tile_logits, target_tile_logits, state, device):
+    Q = source_tile_logits.shape[1]
+    R = source_tile_logits.shape[2]
+
+    
+    source_tile_logits_2d = source_tile_logits[0]  
+    target_tile_logits_2d = target_tile_logits[0]
+    action_values_2d = action_values[0]
+
+    index_to_coord = {}
+    for (q, r, s), hex_tile in game.atlas.landscape.items():
+        grid_q = q + game.size
+        grid_r = r + game.size
+        idx = grid_q * R + grid_r
+        index_to_coord[idx] = (q, r, s)
+
+    unit_tensor = torch.tensor(state["grid"][1]).float().to(device)
+    player_index = game.current_player_index
+    player = game.players[player_index]
+
+    valid_source_mask = torch.full((Q, R), float('-inf')).to(device)
+
+    for (q, r, s), hex_tile in game.atlas.landscape.items():
+        
+        grid_q = q + game.size
+        grid_r = r + game.size
+        
+        if unit_tensor[grid_q, grid_r] <= 0:
+            continue
+
+        source_hex = hex_tile
+        potential_targets = game.atlas.neighbors_within_radius(source_hex, 2)
+        has_valid_target = False
+        for tgt in potential_targets:
+            if game.can_we_do_that(player, source_hex, tgt, 'move/attack') or game.can_we_do_that(player, source_hex, tgt, 'build'):
+                has_valid_target = True
+                break
+        
+        if has_valid_target:
+            valid_source_mask[grid_q, grid_r] = 0.0
+
+    masked_source_logits = source_tile_logits_2d + valid_source_mask
+    
+    if torch.all(masked_source_logits == float('-inf')):
+        return None
+                    
+    masked_source_1d = masked_source_logits.view(-1)
+    source_idx = masked_source_1d.argmax(dim=0)
+    source_coords = index_to_coord[source_idx.cpu().item()]
+    world_q, world_r, world_s = source_coords
+    source_hex = game.atlas.get_hex(world_q, world_r, world_s)
+
+    valid_target_mask = torch.full((Q, R), float('-inf')).to(device)
+    possible_actions_for_target = {}
+
+    neighbors_rad2 = game.atlas.neighbors_within_radius(source_hex, 2)
+    for tgt in neighbors_rad2:
+        can_0 = game.can_we_do_that(player, source_hex, tgt, 'move/attack')
+        can_1 = game.can_we_do_that(player, source_hex, tgt, 'build')
+        if can_0 or can_1:
+            gq = tgt.q + game.size
+            gr = tgt.r + game.size
+            valid_target_mask[gq, gr] = 0.0
+            valid_set = []
+            if can_0:
+                valid_set.append(0)
+            if can_1:
+                valid_set.append(1)
+            possible_actions_for_target[(gq, gr)] = valid_set
+
+    masked_target_logits = target_tile_logits_2d + valid_target_mask
+    
+    masked_target_1d = masked_target_logits.view(-1)
+    target_idx = masked_target_1d.argmax(dim=0)
+    target_coords = index_to_coord[target_idx.cpu().item()]
+    tw_q, tw_r, tw_s = target_coords
+    
+    t_q = tw_q + game.size
+    t_r = tw_r + game.size
+
+    valid_actions = possible_actions_for_target.get((t_q, t_r), [])
+    chosen_action_value = action_values_2d[t_q, t_r]
+    action_prob = torch.sigmoid(chosen_action_value)
+    
+    if len(valid_actions) == 2:
+        # choose action 0 if prob < 0.5 else action 1
+        if action_prob.item() < 0.5:
+            action_type = torch.tensor(valid_actions[0]).long().to(device)
+        else:
+            action_type = torch.tensor(valid_actions[1]).long().to(device)
+    elif len(valid_actions) == 1:
+        action_type = torch.tensor(valid_actions[0]).long().to(device)
+    else:
+        raise ValueError("No valid actions for target!")
+
+
+    
+    return {
+        'action_type': action_type,
+        'coordinates': {
+            'source_q': world_q,
+            'source_r': world_r,
+            'target_q': tw_q,
+            'target_r': tw_r
+        }
+    }
+    
+def neural_network_step(action, game):
+        
+        action_type, source_q, source_r, target_q, target_r = action
+
+        source_tile = game.atlas.get_hex(source_q, source_r, -source_q - source_r)
+        target_tile = game.atlas.get_hex(target_q, target_r, -target_q - target_r)
+        if action_type == 0:  # Move/Attack
+      
+            if target_tile.unit is not None:
+
+                game.attack_unit(source_tile.unit, target_tile.unit)
+                
+            else:
+                game.move_unit(source_tile.unit, source_tile, target_tile)
+            
+
+        elif action_type == 1:  # Build
+             if isinstance(source_tile.unit, City):
+                    if target_tile.is_water:
+                        game.place_battleship(source_tile.unit.owner,source_tile, target_tile)
+                        
+                    else:
+                        game.place_soldier(source_tile.unit.owner, source_tile, target_tile)
+
+                        
+                    
+             else:
+                game.build_city(source_tile.unit.owner, source_tile, target_tile)

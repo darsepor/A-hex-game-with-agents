@@ -14,132 +14,13 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from CNNAC import ActorCriticNetwork
 
-
-
-
-def sample_apply_masks(action_values, source_tile_logits, target_tile_logits, state, env):
-    Q = source_tile_logits.shape[1]
-    R = source_tile_logits.shape[2]
-
-    
-    source_tile_logits_2d = source_tile_logits[0]  
-    target_tile_logits_2d = target_tile_logits[0]
-    action_values_2d = action_values[0]
-
-    index_to_coord = {}
-    for (q, r, s), hex_tile in env.game.atlas.landscape.items():
-        grid_q = q + env.game.size
-        grid_r = r + env.game.size
-        idx = grid_q * R + grid_r
-        index_to_coord[idx] = (q, r, s)
-
-    unit_tensor = torch.tensor(state["grid"][1]).float().cuda()
-    player_index = env.game.current_player_index
-    player = env.game.players[player_index]
-
-    valid_source_mask = torch.full((Q, R), float('-inf')).cuda()
-
-    for (q, r, s), hex_tile in env.game.atlas.landscape.items():
-        
-        grid_q = q + env.game.size
-        grid_r = r + env.game.size
-        
-        if unit_tensor[grid_q, grid_r] <= 0:
-            continue
-
-        source_hex = hex_tile
-        potential_targets = env.game.atlas.neighbors_within_radius(source_hex, 2)
-        has_valid_target = False
-        for tgt in potential_targets:
-            if env.game.can_we_do_that(player, source_hex, tgt, 'move/attack') or env.game.can_we_do_that(player, source_hex, tgt, 'build'):
-                has_valid_target = True
-                break
-        
-        if has_valid_target:
-            valid_source_mask[grid_q, grid_r] = 0.0
-
-    masked_source_logits = source_tile_logits_2d + valid_source_mask
-    
-    if torch.all(masked_source_logits == float('-inf')):
-        return None
-                    
-    source_probs = torch.softmax(masked_source_logits.view(-1), dim=-1)
-    source_dist = torch.distributions.Categorical(source_probs)
-    
-    source_idx = source_dist.sample()
-    source_coords = index_to_coord[source_idx.cpu().item()]
-    world_q, world_r, world_s = source_coords
-    source_hex = env.game.atlas.get_hex(world_q, world_r, world_s)
-
-    valid_target_mask = torch.full((Q, R), float('-inf')).cuda()
-    possible_actions_for_target = {}
-
-    neighbors_rad2 = env.game.atlas.neighbors_within_radius(source_hex, 2)
-    for tgt in neighbors_rad2:
-        can_0 = env.game.can_we_do_that(player, source_hex, tgt, 'move/attack')
-        can_1 = env.game.can_we_do_that(player, source_hex, tgt, 'build')
-        if can_0 or can_1:
-            gq = tgt.q + env.game.size
-            gr = tgt.r + env.game.size
-            valid_target_mask[gq, gr] = 0.0
-            valid_set = []
-            if can_0:
-                valid_set.append(0)
-            if can_1:
-                valid_set.append(1)
-            possible_actions_for_target[(gq, gr)] = valid_set
-
-    masked_target_logits = target_tile_logits_2d + valid_target_mask + env.mask.cuda()
-    target_probs = torch.softmax(masked_target_logits.view(-1), dim=-1)
-    target_dist = torch.distributions.Categorical(target_probs)
-    
-    target_idx = target_dist.sample()
-    target_coords = index_to_coord[target_idx.cpu().item()]
-    tw_q, tw_r, tw_s = target_coords
-    
-    t_q = tw_q + env.game.size
-    t_r = tw_r + env.game.size
-
-    valid_actions = possible_actions_for_target.get((t_q, t_r), [])
-    chosen_action_value = action_values_2d[t_q, t_r]
-    action_prob = torch.sigmoid(chosen_action_value)
-    action_type_dist = torch.distributions.Bernoulli(action_prob)
-    
-    if len(valid_actions) == 2:
-        action_type = action_type_dist.sample().long()
-        
-    elif len(valid_actions) == 1:
-        action_type = torch.tensor(valid_actions[0]).cuda().long()
-        
-    else:
-        raise ValueError("No valid actions for target!")
-
-
-    
-    return {
-        'action_type': action_type,
-        'action_type_distribution': action_type_dist,  
-        'source_tile_idx': source_idx,
-        'source_tile_distribution': source_dist,
-        'target_tile_idx': target_idx,
-        'target_tile_distribution': target_dist,
-        'coordinates': {
-            'source_q': world_q,
-            'source_r': world_r,
-            'target_q': tw_q,
-            'target_r': tw_r
-        }
-    }
-
-
-
-
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 
 
 def main():
-    epochs = 1000
+    epochs = 10
     learning_rate = 0.001
     discount_factor = 0.98 #gamma
     trace_decay_rate = 0.9 #lambda
@@ -149,8 +30,8 @@ def main():
     env = CustomGameEnv(size)
     
     
-    model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
-    target_model = ActorCriticNetwork((2, env.size, env.size), 2).cuda()
+    model = ActorCriticNetwork((2, env.size, env.size), 2).to(device)
+    target_model = ActorCriticNetwork((2, env.size, env.size), 2).to(device)
     if initialized:
         saved_state_dict = torch.load(f"size-{size}-actor_critic_model.pth")
         model.load_state_dict(saved_state_dict)
@@ -168,8 +49,8 @@ def main():
 
     for epoch in range(epochs):
         episode_reward = 0
-        eligibility_traces_player1 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
-        eligibility_traces_player2 = {name: torch.zeros_like(param, device='cuda') for name, param in model.named_parameters()}
+        eligibility_traces_player1 = {name: torch.zeros_like(param, device=device) for name, param in model.named_parameters()}
+        eligibility_traces_player2 = {name: torch.zeros_like(param, device=device) for name, param in model.named_parameters()}
         
         state = env.reset(size)
         done = False
@@ -181,12 +62,12 @@ def main():
         target_model.load_state_dict(model.state_dict())
         while not done:
             timestep += 1
-            grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).cuda()
-            gold_tensor = torch.tensor(state["gold"]).float().unsqueeze(0).cuda()
+            grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).to(device)
+            gold_tensor = torch.tensor(state["gold"]).float().unsqueeze(0).to(device)
             
             action_values, source_tile_logits, target_tile_logits, value = model(grid_tensor, gold_tensor)
             
-            sampling_results = sample_apply_masks(action_values, source_tile_logits, target_tile_logits, state, env)
+            sampling_results = env.sample_apply_masks(action_values, source_tile_logits, target_tile_logits, state, device)
             
             if sampling_results is None: 
                 env.game.next_turn()
@@ -212,8 +93,8 @@ def main():
             if reward < 0: #invalid count is unused, if an invalid action is taken, the game breaks as it should be masked out.
                 invalid += 1
             
-            next_grid_tensor = torch.tensor(next_state_this_pov["grid"]).float().unsqueeze(0).cuda()
-            next_gold_tensor = torch.tensor(next_state_this_pov["gold"]).float().unsqueeze(0).cuda()
+            next_grid_tensor = torch.tensor(next_state_this_pov["grid"]).float().unsqueeze(0).to(device)
+            next_gold_tensor = torch.tensor(next_state_this_pov["gold"]).float().unsqueeze(0).to(device)
             
             with torch.no_grad():
                 _, _, _, next_value = target_model(next_grid_tensor, next_gold_tensor)

@@ -28,8 +28,8 @@ AI is stuck though and does many invalid actions, and maybe it's good for the va
 Maybe changing the game logic to include cash-outs would work but that would mess with debt mechanic and unit costs. And it seems I've tuned those quite well two months ago
 because touching them just seems to make the game dumber/harder to resolve, or at least seems so from watching the visualization during training.
 
--23/12 EDIT: No longer needed. Invalid actions are masked out. TO DO: Should include terrain in the terminal visualization. Should track invalid actions.
--TO DO: Use the number of turns to beat (if it is beaten) the hard-coded SimpleAI for testing eval as we do not train on it.
+-24/12 EDIT: Still did it to see where it's struggling 23/12 EDIT: No longer needed. Invalid actions are masked out. TO DO: Should include terrain in the terminal visualization. Should track invalid actions.
+-19/01 EDIT: Done! TO DO: Use the number of turns to beat (if it is beaten) the hard-coded SimpleAI for testing eval as we do not train on it.
 -Maybe passing through linear layer(s) before the softmax would be any good? Probably not though since the "classes" are still grid-like.
 -The way how output grid and action type heads are related to each and the whole decision-making sequence in the architecture is most likely very flawed.
 
@@ -60,3 +60,12 @@ the unit could sacrifice itself in order to change tile, to account for debt sta
 -Okay, but there is no good reason why it should fail to learn to get over the river. And to make a plan. And not just spam as much units
 as soon as possible. 
 -I suspect the current residual connection just makes the network not use most layers. Will adjust.
+
+26/12
+-Probably just stacking convolutions like that does not work for decision-making. I'm gonna make a new architecture with proper
+residual blocks and slapping on a transformer encoder at the end for global associations. Maybe it'll cross rivers then...
+-If not, MCTS it is.
+
+19/01
+Coming back!! 
+TO DO: A class that has the neural network play the game has been implemented, however the sampling is not greedy.
