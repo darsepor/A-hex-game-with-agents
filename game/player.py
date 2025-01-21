@@ -3,7 +3,7 @@ import random
 from game.entity import Entity, Soldier, City, BattleShip
 import torch
 import numpy as np
-from networks import ActorCriticNetwork, ResActorCriticNetwork
+from res_net_AC import ResActorCriticNetwork
 import os
 import sys
 
@@ -243,9 +243,9 @@ class ANNAI(Player): #This is for evaluation
 def get_observation(game):
     Q = game.size * 2 + 1
     R = game.size * 2 + 1
-    terrain_layer = np.full((Q, R), -1, dtype=np.int32)  # Initialize with -1 for unused areas,
-                                                            #as it is an injective map from hex grid to observation space
-    units_layer = np.full((Q, R), 0, dtype=np.int32)     #Same for units EDIT: better to just apply a mask to logits i guess
+    terrain_layer = np.full((Q, R), -1, dtype=np.int32)
+                                                           
+    units_layer = np.full((Q, R), 0, dtype=np.int32)
     player = game.current_player_index
     for (q, r, s), hex_tile in game.atlas.landscape.items():
         grid_q = q + game.size

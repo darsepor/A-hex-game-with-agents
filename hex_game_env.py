@@ -89,7 +89,10 @@ class CustomGameEnv(gym.Env):
                     
              else:
                 self.game.build_city(source_tile.unit.owner, source_tile, target_tile)
-                    
+        #player_index = self.game.current_player_index
+        #current_player = self.game.players[player_index]
+        #opponent = self.game.players[(player_index + 1) % 2]
+        #reward += 0.1 * (len(current_player.units) - len(opponent.units))
 
         
 

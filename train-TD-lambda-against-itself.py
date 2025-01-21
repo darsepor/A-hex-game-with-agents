@@ -12,7 +12,7 @@ import time
 import json
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
-from networks import ActorCriticNetwork, ResActorCriticNetwork
+from res_net_AC import ResActorCriticNetwork
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -22,8 +22,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 def main():
     epochs = 100
     learning_rate = 0.001
-    discount_factor = 0.98 #gamma
-    trace_decay_rate = 0.9 #lambda
+    discount_factor = 0.99 #gamma
+    trace_decay_rate = 0.95 #lambda
     initialized = False #whether we're not training from scratch
     size = 5
 
@@ -40,6 +40,7 @@ def main():
     target_model.eval()
 
     total_optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=0.01)
+    scheduler = optim.lr_scheduler.ExponentialLR(total_optimizer, gamma=trace_decay_rate)
     critic_loss_fn = nn.MSELoss()
 
     victories = 0
@@ -135,12 +136,12 @@ def main():
             
             total_optimizer.step()
             
-            tau = 0.01
-            for target_param, local_param in zip(target_model.parameters(), model.parameters()):
-                target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
+            #tau = 0.005
+            #for target_param, local_param in zip(target_model.parameters(), model.parameters()):
+            #    target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
                 
             
-            if done or reward>0 or timestep % 100 == 0:
+            if done or reward>0 or timestep % 10 == 0:
                 grid_0 = state["grid"][0]
                 grid_1 = state["grid"][1]
     
@@ -169,12 +170,15 @@ def main():
         cumulative_rewards.append(episode_reward/timestep)
         rewards_per_timestep.append(episode_reward/timestep)
 
+        # Step the scheduler at the end of each epoch
+        scheduler.step()
+
     torch.save(model.state_dict(), f"size-{size}-actor_critic_model.pth")
     print("Training complete!!")
 
     rewards_file = f"size-{size}-rewards.json"
     
-    if os.path.exists(rewards_file):
+    if os.path.exists(rewards_file) and initialized:
         with open(rewards_file, "r") as f:
             all_rewards = json.load(f)
     else:

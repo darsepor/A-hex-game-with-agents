@@ -1,4 +1,4 @@
-
+import sys
 from game.game_logic import GameLogic
 from game.player import SimpleAI, ANNAI
 
@@ -9,6 +9,8 @@ def run_matches(num_games=100):
         game_logic = GameLogic(size=5, players=[ANNAI, SimpleAI])
         while not game_logic.game_over and game_logic.steps < 500:
             game_logic.next_turn()
+
+            
         #If player 1 has no cities, player 2 wins, else player 1 wins
         if len(game_logic.players[0].cities) == 0:
             results["Player 2"] += 1
@@ -17,6 +19,7 @@ def run_matches(num_games=100):
             
         else:
             results["Draw"] += 1
+
     print(f"Player 1 wins: {results['Player 1']}")
     print(f"Player 2 wins: {results['Player 2']}")
     print(f"Draws: {results['Draw']}")

@@ -54,7 +54,7 @@ design is bad and it takes too long. Next step is to implement an eval against a
 can move multiple pieces per turn. Would simplify the network a lot for the very least.
 -TO DO: I'm thinking of trying a new training approach where the model plays against an older version of itself rather than itself. Should stabilize.
 -After visualization, I see my guess about soft-locks was correct. The players can't reach each other due to terrain and running out of money.
--TO DO: Eligibility traces and advantage do not interact as they should.
+-Eligibility traces and advantage do not interact as they should.
 -Gotta fix soft locks. An idea is pay gold to turn an empty tile into land/water (ships can build canals and soldiers bridges). Or
 the unit could sacrifice itself in order to change tile, to account for debt states.
 -Okay, but there is no good reason why it should fail to learn to get over the river. And to make a plan. And not just spam as much units
@@ -73,3 +73,11 @@ residual blocks and slapping on a transformer encoder at the end for global asso
 by randomly following things where immediate reward is expected. I could sample from a softmax in eval as well tho, but that would be cheating.Best action should be best action. Let's see how it fares against SimpleAI.
 -Ran an eval against SimpleAI, the SimpleAI wins 76% of the games, 18% being draws, and the CNN winning 6%. RIP
 -Gonna try a resnet, with some linear layers inbetween
+20/01
+-TO DO: Eligibility traces are still messed up, need to look up code online and ADAM interactions
+-All the ResNets I've tested seem to be doing worse than the more vanilla-ish net so far.
+-I've increased game complexity slightly faster than model capacity throughout. Game design kinda sucks, but whatever adjustments I can think of would make it too easy to learn.
+-The problem I'd say is the nets go into a minima where they just spend all their money instantly, and low time-preference SimpleAI crushes them. Plus latter has proper pathfinding (I'm not sure
+whether the nets are learning the latter, from the visualizations it seems like there's only pointless movement when there's nowhere to go).
+-I think I'm going to switch up the training regime now. Without a value head (that needs flattening and a linear layer), I could go with curriculum learning, increasing the map size every few epochs.
+-Managed to train a resnet with 11% win, 33% draw. Improving. Going to find the best kind of block out of the few I'm considering and then try a new training approach. Or maybe even attention?
