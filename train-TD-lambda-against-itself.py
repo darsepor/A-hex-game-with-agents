@@ -18,10 +18,10 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def main():
     curriculum_stages = [
-        (4, 15), 
-        (5, 15),
-        (7, 15),
-        (9, 15)
+        (2, 15), 
+        (3, 15),
+        (4, 15),
+        (5, 15)
     ]
     
     base_learning_rate = 0.001

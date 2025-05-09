@@ -208,11 +208,11 @@ class ReinforcementAITraining(Player):
         return True
     
 class ANNAI(Player): #This is for evaluation
-    def __init__(self, name, color, size=5, device='cuda'):
+    def __init__(self, name, color, size=4, device='cuda'):
         super().__init__(name, color)
         self.device = device
         self.model = ResActorCriticNetwork((2, size*2+1, size*2+1), 2).to(self.device)
-        self.model.load_state_dict(torch.load(f"size-{size}-actor_critic_model.pth", map_location=self.device))
+        self.model.load_state_dict(torch.load("overall_curriculum_actor_critic_model.pth", map_location=self.device))
         self.model.eval()
         
         
