@@ -22,19 +22,24 @@ def ensure_dir(directory):
 
 def main():
     curriculum_stages = [
-        (2, 50), 
-        (3, 50),
-        (4, 50),
-        (5, 50)
+        (2, 20), 
+        (3, 20),
+        (4, 20),
+        (5, 20)
     ]
     
-    base_learning_rate = 0.001
+    stage_initial_learning_rates = [0.001, 0.0008, 0.0006, 0.0004] 
+    if len(stage_initial_learning_rates) != len(curriculum_stages):
+        raise ValueError("stage_initial_learning_rates must have the same number of elements as curriculum_stages.")
+
+    #within_stage_lr_decay_gamma = 0.99 # Decay factor for ExponentialLR within a stage
+
     discount_factor = 0.99 #gamma
-    trace_decay_rate = 0.95 #lambda
+    trace_decay_rate = 0.95 #lambda, like 20 steps credit window
     initialized_curriculum_run = False 
     global_model_load_path = "overall_curriculum_actor_critic_model.pth" # Path for loading a model for the whole curriculum
 
-    all_rewards_across_curriculum = []
+    global_all_episode_avg_step_rewards_history = []
     global_episode_count = 0
     
     # Create a timestamped subdirectory for this run's plots
@@ -63,34 +68,44 @@ def main():
     target_model.load_state_dict(model.state_dict())
     target_model.eval()
 
-    total_optimizer = optim.AdamW(model.parameters(), lr=base_learning_rate, weight_decay=0.01)
-    #scheduler = optim.lr_scheduler.ExponentialLR(total_optimizer, gamma=0.99) doesn't make as much sense with the curriculum
+    total_optimizer = optim.AdamW(model.parameters(), lr=stage_initial_learning_rates[0], weight_decay=0.01)
     critic_loss_fn = nn.MSELoss()
+    #scheduler = None # Will be initialized at the start of each stage
 
-    for stage_idx, (current_size, num_epochs_for_stage) in enumerate(curriculum_stages):
-        print(f"--- Starting Curriculum Stage {stage_idx + 1}/{len(curriculum_stages)}: Size {current_size} for {num_epochs_for_stage} epochs ---")
+    for stage_idx, (current_size, num_episodes_in_stage) in enumerate(curriculum_stages):
+        current_initial_lr = stage_initial_learning_rates[stage_idx]
+        for param_group in total_optimizer.param_groups:
+            param_group['lr'] = current_initial_lr
+        
+        # Initialize a new scheduler for this stage
+        #scheduler = optim.lr_scheduler.ExponentialLR(total_optimizer, gamma=within_stage_lr_decay_gamma)
+        
+        print(f"--- Starting Curriculum Stage {stage_idx + 1}/{len(curriculum_stages)}: Size {current_size} for {num_episodes_in_stage} episodes (Initial LR: {current_initial_lr}) ---")
         
         size = current_size 
         env = CustomGameEnv(size) # Initialize env with current_size for this stage
         
 
         stage_victories = 0
-        cumulative_rewards_stage = deque(maxlen=10)
+        recent_episode_avg_step_rewards = deque(maxlen=10)
         
-        rewards_per_timestep_stage = []
+        current_stage_episode_avg_step_rewards_history = []
 
-        for epoch in range(num_epochs_for_stage):
-            episode_reward = 0
+        for episode_in_stage in range(num_episodes_in_stage):
+            current_episode_total_reward = 0
             eligibility_traces_player1 = {name: torch.zeros_like(param, device=device) for name, param in model.named_parameters()}
             eligibility_traces_player2 = {name: torch.zeros_like(param, device=device) for name, param in model.named_parameters()}
             
-            state = env.reset(size) # Reset env with the correct current size for this episode
+            steps_since_last_positive_reward_p1 = 0
+            steps_since_last_positive_reward_p2 = 0
+            
+            state = env.reset(size)
             done = False
             timestep = -1
             
             target_model.load_state_dict(model.state_dict())
 
-            print(f"Stage {stage_idx+1} (Size {size}) - Epoch: {epoch+1}/{num_epochs_for_stage} (Global Ep: {global_episode_count +1})")
+            print(f"Stage {stage_idx+1} (Size {size}) - Episode: {episode_in_stage+1}/{num_episodes_in_stage} (Global Ep: {global_episode_count +1})") # Renamed
             
             while not done:
                 timestep += 1
@@ -117,7 +132,24 @@ def main():
                 next_state_this_pov, next_state_next_pov, reward, done, _ = env.step(
                     (action_type, coords['source_q'], coords['source_r'], coords['target_q'], coords['target_r']))
                 
-                episode_reward += reward
+                original_env_reward = reward
+                
+                if player == 0:
+                    if original_env_reward > 0:
+                        steps_since_last_positive_reward_p1 = 0
+                    else:
+                        steps_since_last_positive_reward_p1 += 1
+                        if steps_since_last_positive_reward_p1 >= 15:
+                            reward += -0.01
+                elif player == 1:
+                    if original_env_reward > 0:
+                        steps_since_last_positive_reward_p2 = 0
+                    else:
+                        steps_since_last_positive_reward_p2 += 1
+                        if steps_since_last_positive_reward_p2 >= 15:
+                            reward += -0.01
+                
+                current_episode_total_reward += reward
                 
                 next_grid_tensor = torch.tensor(next_state_this_pov["grid"]).float().unsqueeze(0).to(device)
                 next_gold_tensor = torch.tensor(next_state_this_pov["gold"]).float().unsqueeze(0).to(device)
@@ -194,13 +226,15 @@ def main():
                     
                     sys.stdout.write(f"Gold: {str(state['gold'])}\n")
                     sys.stdout.write(grid_str + "\n")
-                    sys.stdout.write(f"Stage {stage_idx+1}, Size {size}, Ep {epoch+1}, Step: {timestep}, P: {player}, Step Reward: {reward:.2f}, Ep. Reward: {episode_reward:.2f}\n")
+                    sys.stdout.write(f"Stage {stage_idx+1}, Size {size}, Ep {episode_in_stage+1}, Step: {timestep}, P: {player}, Step Reward: {reward:.2f}, Ep. Total Reward: {current_episode_total_reward:.2f}\n") # Clarified Ep. Reward
                     sys.stdout.write(f"Action: {(action_type.item(), coords['source_q'] + env.game.size, coords['source_r'] + env.game.size, coords['target_q'] + env.game.size, coords['target_r'] + env.game.size)}\n")
                     sys.stdout.write(f"Victories (stage): {stage_victories}, V_est: {value.item():.2f}, TD_target: {td_target.item():.2f}\n")
-                    avg_rew_str = "N/A"
-                    if cumulative_rewards_stage:
-                        avg_rew_str = f"{sum(cumulative_rewards_stage) / len(cumulative_rewards_stage):.2f}"
-                    sys.stdout.write(f"Avg Ep. Reward/Step (last 10): {avg_rew_str}\n")
+                    
+                    avg_recent_avg_step_reward_str = "N/A"
+                    if recent_episode_avg_step_rewards:
+                        avg_recent_avg_step_reward = sum(recent_episode_avg_step_rewards) / len(recent_episode_avg_step_rewards)
+                        avg_recent_avg_step_reward_str = f"{avg_recent_avg_step_reward:.2f}"
+                    sys.stdout.write(f"Avg of Ep. Avg Step Reward (last 10 eps): {avg_recent_avg_step_reward_str}\n")
                     sys.stdout.flush()
                 
                 state = next_state_next_pov
@@ -211,32 +245,28 @@ def main():
                 elif timestep > 500:
                     done = True
             
-            if timestep >= 0:
-                avg_reward_this_episode = episode_reward / (timestep + 1)
-            else:
-                avg_reward_this_episode = 0
+            episode_length = timestep + 1
+            current_episode_avg_step_reward = 0.0
+            if episode_length > 0:
+                current_episode_avg_step_reward = current_episode_total_reward / episode_length
             
-            cumulative_rewards_stage.append(avg_reward_this_episode)
-            rewards_per_timestep_stage.append(avg_reward_this_episode)
-            all_rewards_across_curriculum.append(avg_reward_this_episode)
+            recent_episode_avg_step_rewards.append(current_episode_avg_step_reward)
+            current_stage_episode_avg_step_rewards_history.append(current_episode_avg_step_reward)
+            global_all_episode_avg_step_rewards_history.append(current_episode_avg_step_reward)
             global_episode_count += 1
 
             #scheduler.step()
 
-
         torch.save(model.state_dict(), global_model_load_path) 
         print(f"Saved model checkpoint to {global_model_load_path} after stage {stage_idx + 1} (Size: {size})")
 
-        if rewards_per_timestep_stage:
-            # timestamp = time.strftime("%Y%m%d-%H%M%S") # Timestamp now in folder name
+        if current_stage_episode_avg_step_rewards_history:
             plt.figure(figsize=(10, 6))
-            plt.plot(list(range(len(rewards_per_timestep_stage))), rewards_per_timestep_stage, label=f"Stage {stage_idx + 1} (Size {size}) Avg Reward/Timestep")
-            plt.xlabel(f"Epoch in Stage {stage_idx + 1}")
-            plt.ylabel("Average Reward per Timestep")
+            plt.plot(list(range(len(current_stage_episode_avg_step_rewards_history))), current_stage_episode_avg_step_rewards_history, label=f"Stage {stage_idx + 1} (Size {size}) Avg Reward/Timestep per Episode") # Renamed list, updated label
+            plt.xlabel(f"Episode in Stage {stage_idx + 1}")
+            plt.ylabel("Average Reward per Timestep in Episode")
             plt.title(f"Rewards for Curriculum Stage {stage_idx + 1} - Size {size}")
             plt.legend(loc='best')
-            plt.grid(True)
-            # Use plots_dir_this_run and simpler filename
             stage_plot_filename = os.path.join(plots_dir_this_run, f"size-{size}-stage{stage_idx + 1}_rewards.png") 
             plt.savefig(stage_plot_filename)
             print(f"Saved stage plot to {stage_plot_filename}")
@@ -244,34 +274,7 @@ def main():
 
     print("--- Curriculum Training Complete ---")
 
-    # overall_rewards_file = f"{plots_dir}all_curriculum_rewards.json" # Already removed
-    # with open(overall_rewards_file, "w") as f:
-    #     json.dump(all_rewards_across_curriculum, f)
-
-    # Remove the final global plot section
-    # plt.figure(figsize=(12, 7))
-    # plt.plot(list(range(len(all_rewards_across_curriculum))), all_rewards_across_curriculum, label="Avg Reward/Timestep per Episode")
-    # 
-    # current_ep_marker = 0
-    # stage_labels_added = set()
-    # for stage_idx_plot, (stage_size, num_epochs_in_stage_plot) in enumerate(curriculum_stages):
-    #     if stage_idx_plot > 0 : 
-    #         label = f'Start Stage {stage_idx_plot+1} (Size {stage_size})'
-    #         if label in stage_labels_added: label = None 
-    #         else: stage_labels_added.add(label)
-    #         plt.axvline(x=current_ep_marker -0.5, color='r', linestyle='--', label=label)
-    #     current_ep_marker += num_epochs_in_stage_plot
-    #
-    # plt.gca().xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{int(x)}"))
-    # plt.gca().yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.2f}"))
-    # plt.xlabel("Global Episode Number")
-    # plt.ylabel("Average Reward per Timestep")
-    # plt.title("Aggregated Rewards Over Curriculum Training")
-    # plt.legend(loc='best')
-    # plt.grid(True)
-    # plt.savefig(f"{plots_dir}curriculum_training_aggregated_rewards.png")
-    # print(f"Saved aggregated curriculum rewards plot to {plots_dir}curriculum_training_aggregated_rewards.png")
-    # plt.show()
+   
     
 if __name__ == "__main__":
     main()

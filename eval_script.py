@@ -7,7 +7,8 @@ def run_evaluation_curriculum(num_games_per_size=20):
     player1_class = ANNAI
     player2_class = SimpleAI
 
-    evaluation_map_sizes = [2, 3, 4, 5]
+    evaluation_map_sizes = [2, 3, 4, 5, 6, 7] # NOTE: we do not train on maps of radius 6 and more, 
+                                           # however, it is interesting to see how the network generalizes on larger maps.
 
     
 
