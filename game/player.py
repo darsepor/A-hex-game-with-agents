@@ -286,12 +286,12 @@ def get_observation(game):
     # Define Unicode characters for visualization
     VIS_EMPTY_LAND = "🟩"
     VIS_EMPTY_WATER = "🟦"
-    VIS_P1_SOLDIER = "S₁"
-    VIS_P1_BATTLESHIP = "B₁"
-    VIS_P1_CITY = "C₁"
-    VIS_P2_SOLDIER = "S₂"
-    VIS_P2_BATTLESHIP = "B₂"
-    VIS_P2_CITY = "C₂"
+    VIS_P1_SOLDIER = "♘ "
+    VIS_P1_BATTLESHIP = "♗ "
+    VIS_P1_CITY = "♔ "
+    VIS_P2_SOLDIER = "♞ "
+    VIS_P2_BATTLESHIP = "♝ "
+    VIS_P2_CITY = "♚ "
     VIS_OUT_OF_BOUNDS = "⬛"
     VIS_UNKNOWN = "X"
 

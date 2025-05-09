@@ -85,3 +85,4 @@ whether the nets are learning the latter, from the visualizations it seems like 
 09/05
 -It has been weighing on me that I didn't finish this. Going to try to get something one last time.
 -Implemented curriculum learning, the architecture now can do any map size.
+-Added embeddings
