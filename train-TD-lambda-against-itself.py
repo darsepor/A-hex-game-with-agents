@@ -22,17 +22,17 @@ def ensure_dir(directory):
 
 def main():
     curriculum_stages = [
-        (2, 20), 
-        (3, 20),
-        (4, 20),
-        (5, 20)
+        (2, 200), 
+        (3, 200),
+        (4, 200),
+        (5, 200)
     ]
     
-    stage_initial_learning_rates = [0.001, 0.0008, 0.0006, 0.0004] 
+    stage_initial_learning_rates = [0.001, 0.0005, 0.00025, 0.000125] 
     if len(stage_initial_learning_rates) != len(curriculum_stages):
         raise ValueError("stage_initial_learning_rates must have the same number of elements as curriculum_stages.")
 
-    #within_stage_lr_decay_gamma = 0.99 # Decay factor for ExponentialLR within a stage
+    within_stage_lr_decay_gamma = 0.99 # Decay factor for ExponentialLR within a stage
 
     discount_factor = 0.99 #gamma
     trace_decay_rate = 0.95 #lambda, like 20 steps credit window
@@ -70,7 +70,7 @@ def main():
 
     total_optimizer = optim.AdamW(model.parameters(), lr=stage_initial_learning_rates[0], weight_decay=0.01)
     critic_loss_fn = nn.MSELoss()
-    #scheduler = None # Will be initialized at the start of each stage
+    # scheduler = None # Will be initialized at the start of each stage
 
     for stage_idx, (current_size, num_episodes_in_stage) in enumerate(curriculum_stages):
         current_initial_lr = stage_initial_learning_rates[stage_idx]
@@ -78,9 +78,9 @@ def main():
             param_group['lr'] = current_initial_lr
         
         # Initialize a new scheduler for this stage
-        #scheduler = optim.lr_scheduler.ExponentialLR(total_optimizer, gamma=within_stage_lr_decay_gamma)
+        # scheduler = optim.lr_scheduler.ExponentialLR(total_optimizer, gamma=within_stage_lr_decay_gamma)
         
-        print(f"--- Starting Curriculum Stage {stage_idx + 1}/{len(curriculum_stages)}: Size {current_size} for {num_episodes_in_stage} episodes (Initial LR: {current_initial_lr}) ---")
+        print(f"--- Starting Curriculum Stage {stage_idx + 1}/{len(curriculum_stages)}: Size {current_size} for {num_episodes_in_stage} episodes (Initial LR: {current_initial_lr}, Decay Gamma: {within_stage_lr_decay_gamma}) ---")
         
         size = current_size 
         env = CustomGameEnv(size) # Initialize env with current_size for this stage
@@ -96,10 +96,7 @@ def main():
             eligibility_traces_player1 = {name: torch.zeros_like(param, device=device) for name, param in model.named_parameters()}
             eligibility_traces_player2 = {name: torch.zeros_like(param, device=device) for name, param in model.named_parameters()}
             
-            steps_since_last_positive_reward_p1 = 0
-            steps_since_last_positive_reward_p2 = 0
-            
-            state = env.reset(size)
+            state = env.reset(size) # Reset env with the correct current size for this episode
             done = False
             timestep = -1
             
@@ -134,20 +131,21 @@ def main():
                 
                 original_env_reward = reward
                 
-                if player == 0:
-                    if original_env_reward > 0:
-                        steps_since_last_positive_reward_p1 = 0
-                    else:
-                        steps_since_last_positive_reward_p1 += 1
-                        if steps_since_last_positive_reward_p1 >= 15:
-                            reward += -0.01
-                elif player == 1:
-                    if original_env_reward > 0:
-                        steps_since_last_positive_reward_p2 = 0
-                    else:
-                        steps_since_last_positive_reward_p2 += 1
-                        if steps_since_last_positive_reward_p2 >= 15:
-                            reward += -0.01
+                # Negative rewards for inactivity removed per user request
+                # if player == 0:
+                #     if original_env_reward > 0:
+                #         steps_since_last_positive_reward_p1 = 0
+                #     else:
+                #         steps_since_last_positive_reward_p1 += 1
+                #         if steps_since_last_positive_reward_p1 >= 15:
+                #             reward += -0.1
+                # elif player == 1:
+                #     if original_env_reward > 0:
+                #         steps_since_last_positive_reward_p2 = 0
+                #     else:
+                #         steps_since_last_positive_reward_p2 += 1
+                #         if steps_since_last_positive_reward_p2 >= 15:
+                #             reward += -0.1
                 
                 current_episode_total_reward += reward
                 
@@ -255,7 +253,7 @@ def main():
             global_all_episode_avg_step_rewards_history.append(current_episode_avg_step_reward)
             global_episode_count += 1
 
-            #scheduler.step()
+            # scheduler.step()
 
         torch.save(model.state_dict(), global_model_load_path) 
         print(f"Saved model checkpoint to {global_model_load_path} after stage {stage_idx + 1} (Size: {size})")

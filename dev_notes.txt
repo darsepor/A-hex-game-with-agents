@@ -74,7 +74,7 @@ by randomly following things where immediate reward is expected. I could sample 
 -Ran an eval against SimpleAI, the SimpleAI wins 76% of the games, 18% being draws, and the CNN winning 6%. RIP
 -Gonna try a resnet, with some linear layers inbetween
 20/01
--TO DO: Eligibility traces are still messed up, need to look up code online and ADAM interactions
+-EDIT 09/05: probably fine tbh, i think there was just exploding gradients due to double counting advantages. TO DO: Eligibility traces are still messed up, need to look up code online and ADAM interactions
 -All the ResNets I've tested seem to be doing worse than the more vanilla-ish net so far.
 -I've increased game complexity slightly faster than model capacity throughout. Game design kinda sucks, but whatever adjustments I can think of would make it too easy to learn.
 -The problem I'd say is the nets go into a minima where they just spend all their money instantly, and low time-preference SimpleAI crushes them. Plus latter has proper pathfinding (I'm not sure
@@ -83,8 +83,9 @@ whether the nets are learning the latter, from the visualizations it seems like 
 -Managed to train a resnet with 11% win, 33% draw. Improving. Going to find the best kind of block out of the few I'm considering and then try a new training approach. Or maybe even attention?
 
 09/05
--It has been weighing on me that I didn't finish this. Going to try to get something one last time.
+-It has been weighing on me that I didn't finish this. Going to try to get it working one last time.
 -Implemented curriculum learning, the architecture now can do any map size.
 -Added embeddings
 -Embeddings have improved performance significantly, excluding draws the model has an overall winrate of 30-40% vs. SimpleAI
-
+-I suspect a CNN just simply can't do pathfinding in larger maps. Say, the terrain is such that one needs to make a U-turn around a corner to reach a goal.
+A CNN is probably straight up incapable of figuring that one out. Will have to use a GNN to win against SimpleAI reliably.
