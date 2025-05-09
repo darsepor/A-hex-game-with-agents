@@ -37,7 +37,7 @@ because touching them just seems to make the game dumber/harder to resolve, or a
 -While refractoring the mess and overhauling masking and training I found a small decision, that didn't think much about and forgot. Basically made actor loss negligible
 after two hundred steps or so into an episode (and I was wondering why it wasn't training! 80-96% of the gradient steps only considered what the value head was doing...)
 I would guess it has been actually incapable so far of learning longer games, where, say, the players spawned far from each other. Probably most of what caused the softlocks.
--TO DO: The next state that we use for td_target is not really the next state as it does not account for the action of the opponent. Not sure how to do this without experience replay.
+-EDIT 09/05: TBH I think this doesn't matter too much, maybe if I change the training regime TO DO: The next state that we use for td_target is not really the next state as it does not account for the action of the opponent. Not sure how to do this without experience replay.
 -The biggest issue right now is that I have implemented action rules/validity in four places: the SimpleAI, GUI, the environment and in training (for masking). Should just be in game logic.
 -This project is way too fun but I'm not sure how much time to dedicate to it. I'd like to try different architectures, expand the game etc. Make visualizations of logits in board states for interpretability.
 
@@ -81,3 +81,7 @@ by randomly following things where immediate reward is expected. I could sample 
 whether the nets are learning the latter, from the visualizations it seems like there's only pointless movement when there's nowhere to go).
 -I think I'm going to switch up the training regime now. Without a value head (that needs flattening and a linear layer), I could go with curriculum learning, increasing the map size every few epochs.
 -Managed to train a resnet with 11% win, 33% draw. Improving. Going to find the best kind of block out of the few I'm considering and then try a new training approach. Or maybe even attention?
+
+09/05
+-It has been weighing on me that I didn't finish this. Going to try to get something one last time.
+-Implemented curriculum learning, the architecture now can do any map size.
