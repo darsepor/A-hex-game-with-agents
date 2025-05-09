@@ -6,6 +6,18 @@ from game.player import ReinforcementAITraining
 from game.entity import BattleShip, City, Soldier, Entity
 import torch
 
+# Vocabulary for tile entities
+EMPTY_LAND = 0
+EMPTY_WATER = 1
+P1_SOLDIER = 2
+P1_BATTLESHIP = 3
+P1_CITY = 4
+P2_SOLDIER = 5
+P2_BATTLESHIP = 6
+P2_CITY = 7
+OUT_OF_BOUNDS = 8
+VOCAB_SIZE = 9
+
 class CustomGameEnv(gym.Env):
     def __init__(self, size, players = [ReinforcementAITraining, ReinforcementAITraining]):
         super(CustomGameEnv, self).__init__()
@@ -112,37 +124,32 @@ class CustomGameEnv(gym.Env):
     def _get_observation(self):
         Q = self.game.size * 2 + 1
         R = self.game.size * 2 + 1
-        terrain_layer = np.full((Q, R), -1, dtype=np.int32)  # Initialize with -1 for unused areas,
-                                                             #as it is an injective map from hex grid to observation space
-        units_layer = np.full((Q, R), 0, dtype=np.int32)     #Same for units EDIT: better to just apply a mask to logits i guess
+        # Create ID grid for entities and terrain
+        id_grid = np.full((Q, R), OUT_OF_BOUNDS, dtype=np.int64)
         player = self.game.current_player_index
         for (q, r, s), hex_tile in self.game.atlas.landscape.items():
             grid_q = q + self.game.size
             grid_r = r + self.game.size
-
-            if hex_tile.is_water:
-                terrain_layer[grid_q, grid_r] = 0
-            else:
-                terrain_layer[grid_q, grid_r] = 1
-
             if hex_tile.unit is None:
-                units_layer[grid_q, grid_r] = 0
+                # Empty tile: land or water
+                id_grid[grid_q, grid_r] = EMPTY_WATER if hex_tile.is_water else EMPTY_LAND
             else:
+                # Unit present: soldier, battleship, or city
                 unit = hex_tile.unit
                 if isinstance(unit, Soldier):
-                    units_layer[grid_q, grid_r] = 3 if unit.owner == self.game.players[player] else -3
+                    id_grid[grid_q, grid_r] = P1_SOLDIER if unit.owner == self.game.players[player] else P2_SOLDIER
                 elif isinstance(unit, BattleShip):
-                    units_layer[grid_q, grid_r] = 7 if unit.owner == self.game.players[player] else -7
+                    id_grid[grid_q, grid_r] = P1_BATTLESHIP if unit.owner == self.game.players[player] else P2_BATTLESHIP
                 elif isinstance(unit, City):
-                    units_layer[grid_q, grid_r] = 20 if unit.owner == self.game.players[player] else -20
-        
-        gold_values = np.array([self.game.players[player].currency, self.game.players[(player + 1) % 2].currency], dtype=np.int32)
-
+                    id_grid[grid_q, grid_r] = P1_CITY if unit.owner == self.game.players[player] else P2_CITY
+        # Gold values for current player and opponent
+        gold_values = np.array([self.game.players[player].currency,
+                                 self.game.players[(player + 1) % 2].currency],
+                                dtype=np.int32)
         observation = {
-            "grid": np.array([terrain_layer, units_layer], dtype=np.int32),
+            "grid": id_grid,  # (Q, R) integer IDs
             "gold": gold_values
         }
-
         return observation
             
     
@@ -164,7 +171,7 @@ class CustomGameEnv(gym.Env):
             idx = grid_q * R + grid_r
             index_to_coord[idx] = (q, r, s)
 
-        unit_tensor = torch.tensor(state["grid"][1]).float().to(device)
+        unit_tensor = torch.tensor(state["grid"]).long().to(device)
         player_index = self.game.current_player_index
         player = self.game.players[player_index]
 
@@ -175,7 +182,7 @@ class CustomGameEnv(gym.Env):
             grid_q = q + self.game.size
             grid_r = r + self.game.size
             
-            if unit_tensor[grid_q, grid_r] <= 0:
+            if unit_tensor[grid_q, grid_r] < P1_SOLDIER:
                 continue
 
             source_hex = hex_tile
@@ -273,7 +280,7 @@ class CustomGameEnv(gym.Env):
 
         unit = source_tile.unit
         if(unit.owner != self.game.players[self.game.current_player_index]):
-            return False
+            return False        
         
         if isinstance(unit, Soldier) and target_tile not in self.game.atlas.neighbors(source_tile):
             return False        

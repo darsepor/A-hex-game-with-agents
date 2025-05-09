@@ -7,6 +7,18 @@ from res_net_AC import ResActorCriticNetwork
 import os
 import sys
 
+# Vocabulary for tile entities
+EMPTY_LAND = 0
+EMPTY_WATER = 1
+P1_SOLDIER = 2
+P1_BATTLESHIP = 3
+P1_CITY = 4
+P2_SOLDIER = 5
+P2_BATTLESHIP = 6
+P2_CITY = 7
+OUT_OF_BOUNDS = 8
+VOCAB_SIZE = 9
+
 class Player(ABC):
     def __init__(self, name, color):
         self.name = name
@@ -211,7 +223,9 @@ class ANNAI(Player): #This is for evaluation
     def __init__(self, name, color, size=4, device='cuda'):
         super().__init__(name, color)
         self.device = device
-        self.model = ResActorCriticNetwork((2, size*2+1, size*2+1), 2).to(self.device)
+        # Embedding dimension must match the training's EMBEDDING_DIM
+        EMBEDDING_DIM = 16
+        self.model = ResActorCriticNetwork((EMBEDDING_DIM, size*2+1, size*2+1), 2).to(self.device)
         self.model.load_state_dict(torch.load("overall_curriculum_actor_critic_model.pth", map_location=self.device))
         self.model.eval()
         
@@ -221,7 +235,7 @@ class ANNAI(Player): #This is for evaluation
             return
         
         state = get_observation(game_logic)
-        grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).to(self.device)
+        grid_tensor = torch.tensor(state["grid"]).long().unsqueeze(0).to(self.device)
         gold_tensor = torch.tensor(state["gold"]).float().unsqueeze(0).to(self.device)
         with torch.no_grad():
             action_values, source_tile_logits, target_tile_logits, _ = self.model(grid_tensor, gold_tensor)
@@ -243,50 +257,69 @@ class ANNAI(Player): #This is for evaluation
 def get_observation(game):
     Q = game.size * 2 + 1
     R = game.size * 2 + 1
-    terrain_layer = np.full((Q, R), -1, dtype=np.int32)
-                                                           
-    units_layer = np.full((Q, R), 0, dtype=np.int32)
+    # Create ID grid for entities and terrain
+    id_grid = np.full((Q, R), OUT_OF_BOUNDS, dtype=np.int64)
     player = game.current_player_index
     for (q, r, s), hex_tile in game.atlas.landscape.items():
         grid_q = q + game.size
         grid_r = r + game.size
-
-        if hex_tile.is_water:
-            terrain_layer[grid_q, grid_r] = 0
-        else:
-            terrain_layer[grid_q, grid_r] = 1
-
         if hex_tile.unit is None:
-            units_layer[grid_q, grid_r] = 0
+            # Empty tile: land or water
+            id_grid[grid_q, grid_r] = EMPTY_WATER if hex_tile.is_water else EMPTY_LAND
         else:
             unit = hex_tile.unit
             if isinstance(unit, Soldier):
-                units_layer[grid_q, grid_r] = 3 if unit.owner == game.players[player] else -3
+                id_grid[grid_q, grid_r] = P1_SOLDIER if unit.owner == game.players[player] else P2_SOLDIER
             elif isinstance(unit, BattleShip):
-                units_layer[grid_q, grid_r] = 7 if unit.owner == game.players[player] else -7
+                id_grid[grid_q, grid_r] = P1_BATTLESHIP if unit.owner == game.players[player] else P2_BATTLESHIP
             elif isinstance(unit, City):
-                units_layer[grid_q, grid_r] = 20 if unit.owner == game.players[player] else -20
-    
+                id_grid[grid_q, grid_r] = P1_CITY if unit.owner == game.players[player] else P2_CITY
+    # Gold values for current player and opponent
     gold_values = np.array([game.players[player].currency, game.players[(player + 1) % 2].currency], dtype=np.int32)
 
     observation = {
-        "grid": np.array([terrain_layer, units_layer], dtype=np.int32),
+        "grid": id_grid,  # (Q, R) integer ID grid
         "gold": gold_values
     }
-    grid_0 = observation["grid"][0]
-    grid_1 = observation["grid"][1]
+    grid_id = observation["grid"]
 
-    grid_str = '\n'.join([' '.join(['🟦' if grid_0[i][j] == 0 and
-                                    cell == 0 else '🟩' if grid_0[i][j] == 1 and 
-                                    cell == 0 else '⬛' if grid_0[i][j] == -1 and 
-                                    cell == 0 else str(cell) for j, cell in enumerate(row)]) for i, row in enumerate(grid_1)])                
-    os.system('cls')
+    # Define Unicode characters for visualization
+    VIS_EMPTY_LAND = "🟩"
+    VIS_EMPTY_WATER = "🟦"
+    VIS_P1_SOLDIER = "S₁"
+    VIS_P1_BATTLESHIP = "B₁"
+    VIS_P1_CITY = "C₁"
+    VIS_P2_SOLDIER = "S₂"
+    VIS_P2_BATTLESHIP = "B₂"
+    VIS_P2_CITY = "C₂"
+    VIS_OUT_OF_BOUNDS = "⬛"
+    VIS_UNKNOWN = "X"
+
+    vis_map = {
+        EMPTY_LAND: VIS_EMPTY_LAND,
+        EMPTY_WATER: VIS_EMPTY_WATER,
+        P1_SOLDIER: VIS_P1_SOLDIER,
+        P1_BATTLESHIP: VIS_P1_BATTLESHIP,
+        P1_CITY: VIS_P1_CITY,
+        P2_SOLDIER: VIS_P2_SOLDIER,
+        P2_BATTLESHIP: VIS_P2_BATTLESHIP,
+        P2_CITY: VIS_P2_CITY,
+        OUT_OF_BOUNDS: VIS_OUT_OF_BOUNDS
+    }
+
+    grid_str_rows = []
+    for row in grid_id:
+        row_str = []
+        for cell_id in row:
+            row_str.append(vis_map.get(cell_id, VIS_UNKNOWN))
+        grid_str_rows.append(" ".join(row_str))
+    grid_str = "\n".join(grid_str_rows)
+
+    os.system('cls' if os.name=='nt' else 'clear')
     sys.stdout.write(str(observation["gold"]) + "\n")
     sys.stdout.flush()
     sys.stdout.write(grid_str)
     sys.stdout.flush()
-    
-    
     
     return observation
         
@@ -309,7 +342,8 @@ def greedy_apply_masks(game, action_values, source_tile_logits, target_tile_logi
         idx = grid_q * R + grid_r
         index_to_coord[idx] = (q, r, s)
 
-    unit_tensor = torch.tensor(state["grid"][1]).float().to(device)
+    # Use ID grid to identify friendly units (IDs >= P1_SOLDIER)
+    unit_tensor = torch.tensor(state["grid"]).long().to(device)
     player_index = game.current_player_index
     player = game.players[player_index]
 
@@ -320,7 +354,8 @@ def greedy_apply_masks(game, action_values, source_tile_logits, target_tile_logi
         grid_q = q + game.size
         grid_r = r + game.size
         
-        if unit_tensor[grid_q, grid_r] <= 0:
+        # Skip if no friendly unit at this position (IDs < P1_SOLDIER)
+        if unit_tensor[grid_q, grid_r] < P1_SOLDIER:
             continue
 
         source_hex = hex_tile

@@ -16,12 +16,16 @@ from res_net_AC import ResActorCriticNetwork
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+def ensure_dir(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
 def main():
     curriculum_stages = [
-        (2, 15), 
-        (3, 15),
-        (4, 15),
-        (5, 15)
+        (2, 250), 
+        (3, 250),
+        (4, 250),
+        (5, 250)
     ]
     
     base_learning_rate = 0.001
@@ -33,13 +37,22 @@ def main():
     all_rewards_across_curriculum = []
     global_episode_count = 0
     
-    plots_dir = "./plots/"
+    # Create a timestamped subdirectory for this run's plots
+    base_plots_dir = "./plots/"
+    ensure_dir(base_plots_dir) # Ensure the base ./plots directory exists
+    run_timestamp = time.strftime("%Y%m%d-%H%M%S")
+    plots_dir_this_run = os.path.join(base_plots_dir, run_timestamp)
+    ensure_dir(plots_dir_this_run)
+    print(f"Saving plots for this run to: {plots_dir_this_run}")
 
  
     initial_size_for_model_init = curriculum_stages[0][0]
+    # Embedding dimension (same as network input channels after embedding)
+    EMBEDDING_DIM = 16
 
-    model = ResActorCriticNetwork((2, initial_size_for_model_init, initial_size_for_model_init), 2).to(device)
-    target_model = ResActorCriticNetwork((2, initial_size_for_model_init, initial_size_for_model_init), 2).to(device)
+    # Instantiate network with embedding_dim as input channels
+    model = ResActorCriticNetwork((EMBEDDING_DIM, initial_size_for_model_init, initial_size_for_model_init), 2).to(device)
+    target_model = ResActorCriticNetwork((EMBEDDING_DIM, initial_size_for_model_init, initial_size_for_model_init), 2).to(device)
 
     if initialized_curriculum_run and os.path.exists(global_model_load_path):
         print(f"Loading pre-trained curriculum model from: {global_model_load_path}")
@@ -50,8 +63,8 @@ def main():
     target_model.load_state_dict(model.state_dict())
     target_model.eval()
 
-    total_optimizer = optim.Adam(model.parameters(), lr=base_learning_rate, weight_decay=0.01)
-    scheduler = optim.lr_scheduler.ExponentialLR(total_optimizer, gamma=0.99) 
+    total_optimizer = optim.AdamW(model.parameters(), lr=base_learning_rate, weight_decay=0.01)
+    #scheduler = optim.lr_scheduler.ExponentialLR(total_optimizer, gamma=0.99) doesn't make as much sense with the curriculum
     critic_loss_fn = nn.MSELoss()
 
     for stage_idx, (current_size, num_epochs_for_stage) in enumerate(curriculum_stages):
@@ -81,8 +94,8 @@ def main():
             
             while not done:
                 timestep += 1
-                # grid_tensor will have dimensions based on current 'size' from env
-                grid_tensor = torch.tensor(state["grid"]).float().unsqueeze(0).to(device)
+                # grid_tensor is integer ID grid: use long dtype
+                grid_tensor = torch.tensor(state["grid"]).long().unsqueeze(0).to(device)
                 gold_tensor = torch.tensor(state["gold"]).float().unsqueeze(0).to(device)
                 
                 # The same model instance handles varying tensor sizes from the env
@@ -141,12 +154,41 @@ def main():
                 total_optimizer.step()
                 
                 if done or reward > 0 or timestep % 10 == 0:
-                    grid_0 = state["grid"][0]
-                    grid_1 = state["grid"][1]
-                    grid_str = '\n'.join([' '.join(['🟦' if grid_0[i][j] == 0 and cell == 0 else \
-                                                   '🟩' if grid_0[i][j] == 1 and cell == 0 else \
-                                                   '⬛' if grid_0[i][j] == -1 and cell == 0 else \
-                                                   str(cell) for j, cell in enumerate(row)]) for i, row in enumerate(grid_1)])
+                    # Visualization based on the new ID grid
+                    current_id_grid = state["grid"]
+
+
+                    VIS_EMPTY_LAND = "🟩"
+                    VIS_EMPTY_WATER = "🟦"
+                    VIS_P1_SOLDIER = "S₁"
+                    VIS_P1_BATTLESHIP = "B₁"
+                    VIS_P1_CITY = "C₁"
+                    VIS_P2_SOLDIER = "S₂"
+                    VIS_P2_BATTLESHIP = "B₂"
+                    VIS_P2_CITY = "C₂"
+                    VIS_OUT_OF_BOUNDS = "⬛" # For out-of-bounds cells
+                    VIS_UNKNOWN = "?" # For any IDs not explicitly mapped
+
+                    local_vis_map = {
+                        0: VIS_EMPTY_LAND,    # EMPTY_LAND
+                        1: VIS_EMPTY_WATER,   # EMPTY_WATER
+                        2: VIS_P1_SOLDIER,    # P1_SOLDIER
+                        3: VIS_P1_BATTLESHIP, # P1_BATTLESHIP
+                        4: VIS_P1_CITY,       # P1_CITY
+                        5: VIS_P2_SOLDIER,    # P2_SOLDIER
+                        6: VIS_P2_BATTLESHIP, # P2_BATTLESHIP
+                        7: VIS_P2_CITY,       # P2_CITY
+                        8: VIS_OUT_OF_BOUNDS  # OUT_OF_BOUNDS
+                    }
+
+                    grid_str_rows = []
+                    for row in current_id_grid:
+                        row_str = []
+                        for cell_id in row:
+                            row_str.append(local_vis_map.get(cell_id, VIS_UNKNOWN))
+                        grid_str_rows.append(" ".join(row_str))
+                    grid_str = "\n".join(grid_str_rows)
+
                     if os.name == 'nt': os.system('cls')
                     else: os.system('clear')
                     
@@ -179,14 +221,14 @@ def main():
             all_rewards_across_curriculum.append(avg_reward_this_episode)
             global_episode_count += 1
 
-            scheduler.step()
+            #scheduler.step()
 
 
         torch.save(model.state_dict(), global_model_load_path) 
         print(f"Saved model checkpoint to {global_model_load_path} after stage {stage_idx + 1} (Size: {size})")
 
         if rewards_per_timestep_stage:
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            # timestamp = time.strftime("%Y%m%d-%H%M%S") # Timestamp now in folder name
             plt.figure(figsize=(10, 6))
             plt.plot(list(range(len(rewards_per_timestep_stage))), rewards_per_timestep_stage, label=f"Stage {stage_idx + 1} (Size {size}) Avg Reward/Timestep")
             plt.xlabel(f"Epoch in Stage {stage_idx + 1}")
@@ -194,7 +236,8 @@ def main():
             plt.title(f"Rewards for Curriculum Stage {stage_idx + 1} - Size {size}")
             plt.legend(loc='best')
             plt.grid(True)
-            stage_plot_filename = f"{plots_dir}size-{size}-stage{stage_idx + 1}_rewards_{timestamp}.png"
+            # Use plots_dir_this_run and simpler filename
+            stage_plot_filename = os.path.join(plots_dir_this_run, f"size-{size}-stage{stage_idx + 1}_rewards.png") 
             plt.savefig(stage_plot_filename)
             print(f"Saved stage plot to {stage_plot_filename}")
             plt.close()
