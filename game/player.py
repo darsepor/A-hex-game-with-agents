@@ -52,7 +52,7 @@ class Human(Player):
         return False
 
 
-class SimpleAI(Player): #doesn't really work well, for testing the game
+class SimpleAI(Player):
     def __init__(self, name, color):
         super().__init__(name, color)
 

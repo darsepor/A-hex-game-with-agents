@@ -44,6 +44,31 @@ def run_evaluation_curriculum(num_games_per_size=20):
     print("\n--- Overall Evaluation Summary ---")
     for size, res in overall_results_summary.items():
         print(f"  Size {size}: {player1_class.__name__} Wins: {res[player1_class.__name__]}, {player2_class.__name__} Wins: {res[player2_class.__name__]}, Draws: {res['Draw']}")
+    trained_sizes = [s for s in evaluation_map_sizes if s < 6]
+    heldout_sizes = [s for s in evaluation_map_sizes if s >= 6]
+    grouped_results = {
+        'trained': {player1_class.__name__: 0, player2_class.__name__: 0, 'Draw': 0},
+        'heldout': {player1_class.__name__: 0, player2_class.__name__: 0, 'Draw': 0}
+    }
+    for s in trained_sizes:
+        for key in grouped_results['trained']:
+            grouped_results['trained'][key] += overall_results_summary[s][key]
+    for s in heldout_sizes:
+        for key in grouped_results['heldout']:
+            grouped_results['heldout'][key] += overall_results_summary[s][key]
+    total_trained_games = num_games_per_size * len(trained_sizes)
+    total_heldout_games = num_games_per_size * len(heldout_sizes)
+    non_draw_trained_games = total_trained_games - grouped_results['trained']['Draw']
+    non_draw_heldout_games = total_heldout_games - grouped_results['heldout']['Draw']
+    print("\n--- Grouped Evaluation Summary ---")
+    print(f"Trained map sizes {trained_sizes}:")
+    print(f"  {player1_class.__name__} win rate (excluding draws): {grouped_results['trained'][player1_class.__name__] / non_draw_trained_games * 100:.2f}% ({grouped_results['trained'][player1_class.__name__]}/{non_draw_trained_games})")
+    print(f"  {player2_class.__name__} win rate (excluding draws): {grouped_results['trained'][player2_class.__name__] / non_draw_trained_games * 100:.2f}% ({grouped_results['trained'][player2_class.__name__]}/{non_draw_trained_games})")
+    print(f"  Draw rate: {grouped_results['trained']['Draw'] / total_trained_games * 100:.2f}% ({grouped_results['trained']['Draw']}/{total_trained_games})")
+    print(f"Held-out map sizes {heldout_sizes}:")
+    print(f"  {player1_class.__name__} win rate (excluding draws): {grouped_results['heldout'][player1_class.__name__] / non_draw_heldout_games * 100:.2f}% ({grouped_results['heldout'][player1_class.__name__]}/{non_draw_heldout_games})")
+    print(f"  {player2_class.__name__} win rate (excluding draws): {grouped_results['heldout'][player2_class.__name__] / non_draw_heldout_games * 100:.2f}% ({grouped_results['heldout'][player2_class.__name__]}/{non_draw_heldout_games})")
+    print(f"  Draw rate: {grouped_results['heldout']['Draw'] / total_heldout_games * 100:.2f}% ({grouped_results['heldout']['Draw']}/{total_heldout_games})")
 
 if __name__ == "__main__":
     run_evaluation_curriculum()
