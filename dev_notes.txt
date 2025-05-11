@@ -104,4 +104,4 @@ is behind an impassable "wall".
 -layer norm seems to have resolved nan values
 -Transformer performs badly and it seems way more sensitive to data, hyperparams, training regime, etc. Probably better to go with an architecture with more inductive biases
 instead.
--Will try local attention and then move on.
+-Will try kernel-like local attention and then move on.

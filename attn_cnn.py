@@ -1,17 +1,22 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 from res_net_AC import ResConvBlockOneLayerFullyConnected
 
 VOCAB_SIZE = 9
 
 class AttentionCNN(nn.Module):
-    def __init__(self, embedding_dim, num_res_blocks=4, attention_heads=4, attention_dropout=0.1, num_attention_layers=2,
-                 use_early_feature_skip=False, #The skip causes instability and makes the thing lazy it seems
-                 block_type=ResConvBlockOneLayerFullyConnected):
+    def __init__(self, embedding_dim, num_res_blocks=3, attention_heads=8, attention_dropout=0.1, num_attention_layers=3,
+                 block_type=ResConvBlockOneLayerFullyConnected,
+                 local_attention_window_size: int | None = 3,
+                 mlp_hidden_dim=128):
         super().__init__()
         self.embedding_dim = embedding_dim
-        self.use_early_feature_skip = use_early_feature_skip
+        
+
+
+        self.local_attention_window_size = local_attention_window_size
         self.tile_embedding = nn.Embedding(VOCAB_SIZE, self.embedding_dim)
 
         early_feature_dim = self.embedding_dim + 2
@@ -30,10 +35,7 @@ class AttentionCNN(nn.Module):
         
         self.cnn_output_dim = cnn_channels[num_res_blocks]
         
-        if self.use_early_feature_skip:
-            raw_combined_dim = self.cnn_output_dim + early_feature_dim
-        else:
-            raw_combined_dim = self.cnn_output_dim
+        raw_combined_dim = self.cnn_output_dim
         
         self.norm_before_attn_proj = nn.LayerNorm(raw_combined_dim)
 
@@ -54,7 +56,7 @@ class AttentionCNN(nn.Module):
             dim_feedforward=self.attention_d_model * 4,
             dropout=attention_dropout,
             activation='relu',
-            batch_first=False
+            batch_first=False # Expects (SeqLen, Batch, Features)
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, 
@@ -64,16 +66,16 @@ class AttentionCNN(nn.Module):
         
         self.pos_embed_cache = {}
 
-        self.output_grid_head = nn.Sequential(
-            nn.Conv2d(self.attention_d_model, 128, kernel_size=1),
+        self.positional_mlp = nn.Sequential(
+            nn.Linear(self.attention_d_model, mlp_hidden_dim),
             nn.ReLU(),
-            nn.Conv2d(128, 3, kernel_size=1)
+            nn.Linear(mlp_hidden_dim, 3)
         )
         
         self.critic_pool = nn.AdaptiveAvgPool2d((1,1))
         self.critic_flatten = nn.Flatten()
         self.critic_fc = nn.Sequential(
-            nn.Linear(raw_combined_dim, 128),
+            nn.Linear(self.cnn_output_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 1)
         )
@@ -84,12 +86,11 @@ class AttentionCNN(nn.Module):
            self.pos_embed_cache.get('device') == device:
             return self.pos_embed_cache['pos_embed']
 
-
         pos_embed = torch.zeros(1, d_model, height, width, device=device)
         half_d_model = d_model // 2
         
         div_term = torch.exp(torch.arange(0, half_d_model, 2, dtype=torch.float32, device=device) * \
-                             -(math.log(10000.0) / half_d_model)) # Adjusted for half_d_model
+                             -(math.log(10000.0) / half_d_model))
         
         pos_w = torch.arange(width, dtype=torch.float32, device=device).unsqueeze(0)
         pos_h = torch.arange(height, dtype=torch.float32, device=device).unsqueeze(0)
@@ -98,19 +99,16 @@ class AttentionCNN(nn.Module):
         pe_w_cos = torch.cos(pos_w.unsqueeze(-1) * div_term)
         pe_w = torch.cat([pe_w_sin, pe_w_cos], dim=-1).permute(0,2,1).unsqueeze(2)
         
-        # For height
         pe_h_sin = torch.sin(pos_h.unsqueeze(-1) * div_term)
         pe_h_cos = torch.cos(pos_h.unsqueeze(-1) * div_term)
         pe_h = torch.cat([pe_h_sin, pe_h_cos], dim=-1).permute(0,2,1).unsqueeze(3)
-
 
         channels_w = pe_w.shape[1]
         channels_h = pe_h.shape[1]
 
         pos_embed[:, :channels_w, :, :] = pe_w.expand(-1, -1, height, -1)
-        if d_model > channels_w : # If there's space left for height features
+        if d_model > channels_w :
              pos_embed[:, channels_w:channels_w+channels_h, :, :] = pe_h.expand(-1, -1, -1, width)
-
 
         self.pos_embed_cache = {'pos_embed': pos_embed, 'size': (height, width), 'dim': d_model, 'device': device}
         return pos_embed
@@ -131,16 +129,12 @@ class AttentionCNN(nn.Module):
             cnn_processed_features = block(cnn_processed_features) 
         
         deep_cnn_features = cnn_processed_features
+        
+        combined_features_for_proj = deep_cnn_features
 
-        if self.use_early_feature_skip:
-            combined_features_for_proj = torch.cat((deep_cnn_features, early_features), dim=1)
-        else:
-            combined_features_for_proj = deep_cnn_features
-
-
-        critic_pooled_cnn_features = self.critic_pool(combined_features_for_proj)
+        critic_pooled_cnn_features = self.critic_pool(deep_cnn_features)
         critic_flat_cnn_features = self.critic_flatten(critic_pooled_cnn_features)
-        value = self.critic_fc(critic_flat_cnn_features) # This 'value' is used in the return
+        value = self.critic_fc(critic_flat_cnn_features)
 
         norm_input_for_proj = combined_features_for_proj.permute(0, 2, 3, 1) 
         norm_output_for_proj = self.norm_before_attn_proj(norm_input_for_proj)
@@ -152,16 +146,52 @@ class AttentionCNN(nn.Module):
         pos_encoding = self._generate_2d_sincos_pos_embed(current_attention_d_model, H, W, device)
             
         features_with_pos = projected_for_attention + pos_encoding
-            
-        seq_for_transformer = features_with_pos.flatten(2).permute(2, 0, 1)
         
-        seq_for_transformer = self.pre_transformer_ln(seq_for_transformer)
-            
-        attended_seq = self.transformer_encoder(seq_for_transformer)
-            
-        attended_features_grid = attended_seq.permute(1, 2, 0).view(B, current_attention_d_model, H, W)
+        if self.local_attention_window_size:
+            ws = self.local_attention_window_size
 
-        output_grid_logits = self.output_grid_head(attended_features_grid)
+            pad_h = (ws - H % ws) % ws
+            pad_w = (ws - W % ws) % ws
+            H_p = H + pad_h
+            W_p = W + pad_w
+
+            features_padded = F.pad(features_with_pos, (0, pad_w, 0, pad_h))
+
+            num_windows_h = H_p // ws
+            num_windows_w = W_p // ws
+
+            x_windowed = features_padded.view(B, current_attention_d_model, num_windows_h, ws, num_windows_w, ws)
+            x_permuted = x_windowed.permute(0, 2, 4, 1, 3, 5).contiguous()
+            x_batched_windows = x_permuted.view(B * num_windows_h * num_windows_w, current_attention_d_model, ws, ws)
+            
+            seq_for_transformer_local = x_batched_windows.flatten(2)
+            seq_for_transformer = seq_for_transformer_local.permute(2, 0, 1)
+            
+            attended_seq = self.transformer_encoder(self.pre_transformer_ln(seq_for_transformer))
+            
+            attended_seq_unpermuted = attended_seq.permute(1, 2, 0)
+            attended_features_in_windows = attended_seq_unpermuted.view(B * num_windows_h * num_windows_w, current_attention_d_model, ws, ws)
+            attended_unbatched = attended_features_in_windows.view(B, num_windows_h, num_windows_w, current_attention_d_model, ws, ws)
+            attended_unpermuted_back = attended_unbatched.permute(0, 3, 1, 4, 2, 5).contiguous()
+            attended_features_grid_padded = attended_unpermuted_back.view(B, current_attention_d_model, H_p, W_p)
+            
+            attended_features_grid = attended_features_grid_padded[:, :, :H, :W]
+
+        else: 
+            seq_for_transformer = features_with_pos.flatten(2).permute(2, 0, 1) 
+            seq_for_transformer = self.pre_transformer_ln(seq_for_transformer)
+            attended_seq = self.transformer_encoder(seq_for_transformer)
+            attended_features_grid = attended_seq.permute(1, 2, 0).view(B, current_attention_d_model, H, W)
+
+        mlp_input = attended_features_grid.permute(0, 2, 3, 1).contiguous()
+        
+        mlp_input_flat = mlp_input.view(-1, current_attention_d_model)
+
+        mlp_output_flat = self.positional_mlp(mlp_input_flat)
+
+        output_grid_permuted = mlp_output_flat.view(B, H, W, 3)
+
+        output_grid_logits = output_grid_permuted.permute(0, 3, 1, 2).contiguous()
         
         source_tile_logits = output_grid_logits[:, 0, :, :]
         target_tile_logits = output_grid_logits[:, 1, :, :]
