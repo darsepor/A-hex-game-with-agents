@@ -90,8 +90,18 @@ whether the nets are learning the latter, from the visualizations it seems like 
 -I suspect a CNN just simply can't do pathfinding in larger maps. Say, the terrain is such that one needs to make a U-turn around a corner to reach a goal.
 A CNN is probably straight up incapable of figuring that one out. Will have to use a GNN to win against SimpleAI reliably.
 -After adjusting learning rates a bit, it seems to be learning some of it, but it's sad -- while nearing a dead end it understands that it needs to turn back.
-But after turning back, it goes towards the dead end again as only closer local knowledge (of that tile being a dead end) override global knowledge of the goal that
+But after turning back, it goes towards the dead end again as only closer local knowledge (of that tile being a dead end) can override global knowledge of the goal that
 is behind an impassable "wall".
 
 10/05
 -50% WR on trained sizes, 13% on sizes bigger than seen in training
+-I'll try self-attention with 2D positional encoding at the end + skip connection of early embeddings, because I'd prefer raw info like "this is water" be undilluted.
+-Running into numerical instability, increasing trace decay and clipping gradients a bit more.
+-Disabled the skip connection, seems to have been to destabilizing.
+-We've got O(n^4) wrt map size :D
+-Struggling to stabilize, adding more layer norm
+-could stop using adam
+-layer norm seems to have resolved nan values
+-Transformer performs badly and it seems way more sensitive to data, hyperparams, training regime, etc. Probably better to go with an architecture with more inductive biases
+instead.
+-Will try local attention and then move on.

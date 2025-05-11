@@ -6,7 +6,7 @@ import numpy as np
 from res_net_AC import ResActorCriticNetwork
 import os
 import sys
-
+from attn_cnn import AttentionCNN  
 # Vocabulary for tile entities
 EMPTY_LAND = 0
 EMPTY_WATER = 1
@@ -225,7 +225,7 @@ class ANNAI(Player): #This is for evaluation
         self.device = device
         # Embedding dimension must match the training's EMBEDDING_DIM
         EMBEDDING_DIM = 16
-        self.model = ResActorCriticNetwork((EMBEDDING_DIM, size*2+1, size*2+1), 2).to(self.device)
+        self.model = AttentionCNN(EMBEDDING_DIM).to(self.device)
         self.model.load_state_dict(torch.load("overall_curriculum_actor_critic_model.pth", map_location=self.device))
         self.model.eval()
         

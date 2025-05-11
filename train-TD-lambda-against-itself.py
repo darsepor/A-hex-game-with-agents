@@ -13,6 +13,7 @@ import json
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from res_net_AC import ResActorCriticNetwork
+from attn_cnn import AttentionCNN
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -22,17 +23,16 @@ def ensure_dir(directory):
 
 def main():
     curriculum_stages = [
-        (2, 200), 
-        (3, 200),
-        (4, 200),
-        (5, 200)
+        (2, 100), 
+        (3, 100),
+        (4, 100),
+        (5, 100)
     ]
     
-    stage_initial_learning_rates = [0.001, 0.0005, 0.00025, 0.000125] 
-    if len(stage_initial_learning_rates) != len(curriculum_stages):
-        raise ValueError("stage_initial_learning_rates must have the same number of elements as curriculum_stages.")
 
-    within_stage_lr_decay_gamma = 0.99 # Decay factor for ExponentialLR within a stage
+
+    initial_learning_rate = 0.001
+    lr_decay_gamma = 0.995
 
     discount_factor = 0.99 #gamma
     trace_decay_rate = 0.95 #lambda, like 20 steps credit window
@@ -42,7 +42,6 @@ def main():
     global_all_episode_avg_step_rewards_history = []
     global_episode_count = 0
     
-    # Create a timestamped subdirectory for this run's plots
     base_plots_dir = "./plots/"
     ensure_dir(base_plots_dir) # Ensure the base ./plots directory exists
     run_timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -52,12 +51,10 @@ def main():
 
  
     initial_size_for_model_init = curriculum_stages[0][0]
-    # Embedding dimension (same as network input channels after embedding)
     EMBEDDING_DIM = 16
 
-    # Instantiate network with embedding_dim as input channels
-    model = ResActorCriticNetwork((EMBEDDING_DIM, initial_size_for_model_init, initial_size_for_model_init), 2).to(device)
-    target_model = ResActorCriticNetwork((EMBEDDING_DIM, initial_size_for_model_init, initial_size_for_model_init), 2).to(device)
+    model = AttentionCNN(EMBEDDING_DIM).to(device)
+    target_model = AttentionCNN(EMBEDDING_DIM).to(device)
 
     if initialized_curriculum_run and os.path.exists(global_model_load_path):
         print(f"Loading pre-trained curriculum model from: {global_model_load_path}")
@@ -68,22 +65,18 @@ def main():
     target_model.load_state_dict(model.state_dict())
     target_model.eval()
 
-    total_optimizer = optim.AdamW(model.parameters(), lr=stage_initial_learning_rates[0], weight_decay=0.01)
+    total_optimizer = optim.AdamW(model.parameters(), lr=initial_learning_rate, weight_decay=0.01)
     critic_loss_fn = nn.MSELoss()
-    # scheduler = None # Will be initialized at the start of each stage
+    
+    scheduler = optim.lr_scheduler.ExponentialLR(total_optimizer, gamma=lr_decay_gamma)
 
     for stage_idx, (current_size, num_episodes_in_stage) in enumerate(curriculum_stages):
-        current_initial_lr = stage_initial_learning_rates[stage_idx]
-        for param_group in total_optimizer.param_groups:
-            param_group['lr'] = current_initial_lr
         
-        # Initialize a new scheduler for this stage
-        # scheduler = optim.lr_scheduler.ExponentialLR(total_optimizer, gamma=within_stage_lr_decay_gamma)
-        
-        print(f"--- Starting Curriculum Stage {stage_idx + 1}/{len(curriculum_stages)}: Size {current_size} for {num_episodes_in_stage} episodes (Initial LR: {current_initial_lr}, Decay Gamma: {within_stage_lr_decay_gamma}) ---")
+        current_lr_for_print = scheduler.get_last_lr()[0]
+        print(f"--- Starting Curriculum Stage {stage_idx + 1}/{len(curriculum_stages)}: Size {current_size} for {num_episodes_in_stage} episodes (Current LR: {current_lr_for_print:.7f}, Decay Gamma: {lr_decay_gamma}) ---")
         
         size = current_size 
-        env = CustomGameEnv(size) # Initialize env with current_size for this stage
+        env = CustomGameEnv(size)
         
 
         stage_victories = 0
@@ -102,11 +95,8 @@ def main():
             
             target_model.load_state_dict(model.state_dict())
 
-            print(f"Stage {stage_idx+1} (Size {size}) - Episode: {episode_in_stage+1}/{num_episodes_in_stage} (Global Ep: {global_episode_count +1})") # Renamed
-            
             while not done:
                 timestep += 1
-                # grid_tensor is integer ID grid: use long dtype
                 grid_tensor = torch.tensor(state["grid"]).long().unsqueeze(0).to(device)
                 gold_tensor = torch.tensor(state["gold"]).float().unsqueeze(0).to(device)
                 
@@ -129,27 +119,11 @@ def main():
                 next_state_this_pov, next_state_next_pov, reward, done, _ = env.step(
                     (action_type, coords['source_q'], coords['source_r'], coords['target_q'], coords['target_r']))
                 
-                original_env_reward = reward
                 
-                # Negative rewards for inactivity removed per user request
-                # if player == 0:
-                #     if original_env_reward > 0:
-                #         steps_since_last_positive_reward_p1 = 0
-                #     else:
-                #         steps_since_last_positive_reward_p1 += 1
-                #         if steps_since_last_positive_reward_p1 >= 15:
-                #             reward += -0.1
-                # elif player == 1:
-                #     if original_env_reward > 0:
-                #         steps_since_last_positive_reward_p2 = 0
-                #     else:
-                #         steps_since_last_positive_reward_p2 += 1
-                #         if steps_since_last_positive_reward_p2 >= 15:
-                #             reward += -0.1
-                
+
                 current_episode_total_reward += reward
                 
-                next_grid_tensor = torch.tensor(next_state_this_pov["grid"]).float().unsqueeze(0).to(device)
+                next_grid_tensor = torch.tensor(next_state_this_pov["grid"]).long().unsqueeze(0).to(device)
                 next_gold_tensor = torch.tensor(next_state_this_pov["gold"]).float().unsqueeze(0).to(device)
                 
                 with torch.no_grad():
@@ -179,6 +153,9 @@ def main():
                         else:
                             eligibility_traces_player2[name] = (current_trace_val * eligibility_traces_player2[name] + param.grad)
                             param.grad = eligibility_traces_player2[name]
+                
+                
+                # It's here!!!!!!!!!, below is the clip_grad_norm_
                 
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 total_optimizer.step()
@@ -233,6 +210,9 @@ def main():
                         avg_recent_avg_step_reward = sum(recent_episode_avg_step_rewards) / len(recent_episode_avg_step_rewards)
                         avg_recent_avg_step_reward_str = f"{avg_recent_avg_step_reward:.2f}"
                     sys.stdout.write(f"Avg of Ep. Avg Step Reward (last 10 eps): {avg_recent_avg_step_reward_str}\n")
+                    
+                    current_lr_for_display = scheduler.get_last_lr()[0]
+                    sys.stdout.write(f"Current LR: {current_lr_for_display:.7f}\n")
                     sys.stdout.flush()
                 
                 state = next_state_next_pov
@@ -253,7 +233,7 @@ def main():
             global_all_episode_avg_step_rewards_history.append(current_episode_avg_step_reward)
             global_episode_count += 1
 
-            # scheduler.step()
+            scheduler.step()
 
         torch.save(model.state_dict(), global_model_load_path) 
         print(f"Saved model checkpoint to {global_model_load_path} after stage {stage_idx + 1} (Size: {size})")
