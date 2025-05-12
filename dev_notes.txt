@@ -105,3 +105,6 @@ is behind an impassable "wall".
 -Transformer performs badly and it seems way more sensitive to data, hyperparams, training regime, etc. Probably better to go with an architecture with more inductive biases
 instead.
 -Will try kernel-like local attention and then move on.
+-It is no good at all. Instead, I'm gonna try making a pure transformer with local attention that is not square patches but TAKES INTO ACCOUNT that we are working with
+hexagons and each tile in the residual stream only interacts with adjacent tiles in terms of the actual game geometry.
+-Transformers love parallelism, so one-sample-one-update is not going to work, new training regime with a replay buffer has been made.

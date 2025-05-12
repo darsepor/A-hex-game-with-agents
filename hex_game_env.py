@@ -153,65 +153,71 @@ class CustomGameEnv(gym.Env):
         return observation
             
     
-    
-    
-    def sample_apply_masks(self, action_values, source_tile_logits, target_tile_logits, state, device):
+    def sample_apply_masks(self, action_values, source_tile_logits, target_tile_logits, state, device,
+                           force_source_idx=None, force_target_idx=None, force_action_type=None):
+        """Applies masks, samples or uses forced indices, and returns chosen action + distributions.
+        
+        If force_* args are None, samples normally.
+        If force_* args are provided, uses them instead of sampling but still calculates distributions
+        based on the provided model outputs (logits/values) and the derived masks.
+        
+        Returns a dictionary containing chosen indices, coordinates, distributions, masks, and dict.
+        """
         Q = source_tile_logits.shape[1]
         R = source_tile_logits.shape[2]
 
-        
+        action_values_2d = action_values[0]
         source_tile_logits_2d = source_tile_logits[0]  
         target_tile_logits_2d = target_tile_logits[0]
-        action_values_2d = action_values[0]
 
-        index_to_coord = {}
+        index_to_coord = {} # Map flat index to (q, r, s) world coords
+        # coord_to_index = {} # Map (q, r, s) world coords to flat index (unused currently but potentially useful)
         for (q, r, s), hex_tile in self.game.atlas.landscape.items():
             grid_q = q + self.game.size
             grid_r = r + self.game.size
             idx = grid_q * R + grid_r
             index_to_coord[idx] = (q, r, s)
+            # coord_to_index[(q,r,s)] = idx
 
         unit_tensor = torch.tensor(state["grid"]).long().to(device)
         player_index = self.game.current_player_index
         player = self.game.players[player_index]
 
         valid_source_mask = torch.full((Q, R), float('-inf')).to(device)
-
-        for (q, r, s), hex_tile in self.game.atlas.landscape.items():
-            
+        for (q, r, s), hex_tile_from_atlas in self.game.atlas.landscape.items():
             grid_q = q + self.game.size
             grid_r = r + self.game.size
-            
             if unit_tensor[grid_q, grid_r] < P1_SOLDIER:
                 continue
 
-            source_hex = hex_tile
-            potential_targets = self.game.atlas.neighbors_within_radius(source_hex, 2)
+            potential_targets = self.game.atlas.neighbors_within_radius(hex_tile_from_atlas, 2)
             has_valid_target = False
             for tgt in potential_targets:
-                if self.game.can_we_do_that(player, source_hex, tgt, 'move/attack') or self.game.can_we_do_that(player, source_hex, tgt, 'build'):
+                if self.game.can_we_do_that(player, hex_tile_from_atlas, tgt, 'move/attack') or \
+                   self.game.can_we_do_that(player, hex_tile_from_atlas, tgt, 'build'):
                     has_valid_target = True
                     break
-            
             if has_valid_target:
                 valid_source_mask[grid_q, grid_r] = 0.0
 
         masked_source_logits = source_tile_logits_2d + valid_source_mask
-        
-        if torch.all(masked_source_logits == float('-inf')):
-            return None
-                        
         source_probs = torch.softmax(masked_source_logits.view(-1), dim=-1)
         source_dist = torch.distributions.Categorical(source_probs)
-        
-        source_idx = source_dist.sample()
+
+        if force_source_idx is not None:
+            source_idx = force_source_idx.long()
+        else:
+            if torch.all(masked_source_logits == float('-inf')):
+                 return None
+            source_idx = source_dist.sample()
+
         source_coords = index_to_coord[source_idx.cpu().item()]
         world_q, world_r, world_s = source_coords
         source_hex = self.game.atlas.get_hex(world_q, world_r, world_s)
-
+        
+        # --- Target Selection (depends on chosen source) --- 
         valid_target_mask = torch.full((Q, R), float('-inf')).to(device)
         possible_actions_for_target = {}
-
         neighbors_rad2 = self.game.atlas.neighbors_within_radius(source_hex, 2)
         for tgt in neighbors_rad2:
             can_0 = self.game.can_we_do_that(player, source_hex, tgt, 'move/attack')
@@ -221,136 +227,75 @@ class CustomGameEnv(gym.Env):
                 gr = tgt.r + self.game.size
                 valid_target_mask[gq, gr] = 0.0
                 valid_set = []
-                if can_0:
-                    valid_set.append(0)
-                if can_1:
-                    valid_set.append(1)
+                if can_0: valid_set.append(0)
+                if can_1: valid_set.append(1)
                 possible_actions_for_target[(gq, gr)] = valid_set
 
-        masked_target_logits = target_tile_logits_2d + valid_target_mask + self.mask.to(device)
+        combined_target_mask = valid_target_mask + self.mask.to(device)
+        masked_target_logits = target_tile_logits_2d + combined_target_mask
         target_probs = torch.softmax(masked_target_logits.view(-1), dim=-1)
         target_dist = torch.distributions.Categorical(target_probs)
         
-        target_idx = target_dist.sample()
-        target_coords = index_to_coord[target_idx.cpu().item()]
-        tw_q, tw_r, tw_s = target_coords
-        
-        t_q = tw_q + self.game.size
-        t_r = tw_r + self.game.size
-
-        valid_actions = possible_actions_for_target.get((t_q, t_r), [])
-        chosen_action_value = action_values_2d[t_q, t_r]
-        action_prob = torch.sigmoid(chosen_action_value)
-        action_type_dist = torch.distributions.Bernoulli(action_prob)
-        
-        if len(valid_actions) == 2:
-            action_type = action_type_dist.sample().long()
-            
-        elif len(valid_actions) == 1:
-            action_type = torch.tensor(valid_actions[0]).to(device).long()
-            
+        if force_target_idx is not None:
+            target_idx = force_target_idx.long()
         else:
-            raise ValueError("No valid actions for target!")
+             if torch.all(masked_target_logits == float('-inf')):
+                 # Chosen source has no valid targets for the current target_tile_logits.
+                 return None # If sampling, indicate failure for this path.
+             target_idx = target_dist.sample()
 
+        target_coords_world = index_to_coord[target_idx.cpu().item()]
+        tw_q, tw_r, tw_s = target_coords_world
+        
+        # --- Action Type Selection (depends on chosen target) --- 
+        target_grid_q = tw_q + self.game.size
+        target_grid_r = tw_r + self.game.size
+        valid_actions = possible_actions_for_target.get((target_grid_q, target_grid_r), [])
+        
+        action_type = None
+        action_type_dist = None # Stores Bernoulli distribution (or a deterministic substitute)
+        
+        if len(valid_actions) == 2: # Both move/attack and build are possible for source-target pair
+            chosen_action_value = action_values_2d[target_grid_q, target_grid_r]
+            action_prob = torch.sigmoid(chosen_action_value) # Prob of choosing action type 1 (build)
+            action_type_dist = torch.distributions.Bernoulli(action_prob)
+            if force_action_type is not None:
+                action_type = force_action_type.long()
+            else:
+                action_type = action_type_dist.sample().long()
+        elif len(valid_actions) == 1: # Only one action type is possible
+            action_type = torch.tensor(valid_actions[0]).to(device).long()
+            # Create a Bernoulli dist that deterministically yields the only valid action for log_prob calculations.
+            deterministic_prob = torch.tensor(1.0 if valid_actions[0] == 1 else 0.0, device=device)
+            action_type_dist = torch.distributions.Bernoulli(deterministic_prob) 
+            if force_action_type is not None and force_action_type.long().item() != action_type.item():
+                 # Consistency check for forced mode.
+                 print(f"Warning: Forced action type {force_action_type.item()} mismatches the only valid action {action_type.item()} for target ({tw_q},{tw_r}) from source ({world_q},{world_r}). Using forced action.")
+                 action_type = force_action_type.long()
+        else: # No valid actions for the chosen/forced source-target pair.
+             if force_target_idx is None: # Problem if we sampled this target.
+                  print(f"Warning: Sampled target ({tw_q},{tw_r}) has no valid actions from source ({world_q},{world_r}). Returning None.")
+                  return None
+             else: # Problem if target was forced, indicates bad buffer data or logic.
+                 raise ValueError(f"Forced target ({tw_q},{tw_r}) has no valid actions from source ({world_q},{world_r}). Invalid state/action data.")
 
+        if action_type is None: # Should be unreachable if logic above is sound.
+            raise ValueError("Action type selection failed unexpectedly.")
         
         return {
             'action_type': action_type,
-            'action_type_distribution': action_type_dist,  
             'source_tile_idx': source_idx,
-            'source_tile_distribution': source_dist,
             'target_tile_idx': target_idx,
+            'action_type_distribution': action_type_dist,
+            'source_tile_distribution': source_dist,
             'target_tile_distribution': target_dist,
             'coordinates': {
                 'source_q': world_q,
                 'source_r': world_r,
                 'target_q': tw_q,
                 'target_r': tw_r
-            }
+            },
+            'valid_source_mask': valid_source_mask,
+            'valid_target_mask': valid_target_mask,
+            'possible_actions_for_target': possible_actions_for_target
         }
-    
-    
-    
-    
-    #Unused, but could be useful for debugging
-    '''
-    def _handle_move_attack(self, source_tile, target_tile):
-        if source_tile is None or target_tile is None or source_tile.unit is None or isinstance(source_tile.unit, City):
-            return False
-
-        unit = source_tile.unit
-        if(unit.owner != self.game.players[self.game.current_player_index]):
-            return False        
-        
-        if isinstance(unit, Soldier) and target_tile not in self.game.atlas.neighbors(source_tile):
-            return False        
-        
-        if isinstance(unit, BattleShip) and target_tile not in self.game.atlas.neighbors_within_radius(source_tile, 2):
-            return False  
-        
-        
-        if target_tile.unit is not None and target_tile.unit.owner != unit.owner:
-            self.game.attack_unit(unit, target_tile.unit)
-            return True
-
-        if target_tile.unit is not None:
-            return False
-        
-        
-        if isinstance(unit, Soldier) and not target_tile.is_water:
-            
-            self.game.move_unit(unit, source_tile, target_tile)
-            return True
-            
-        if isinstance(unit, BattleShip) and target_tile.is_water:
-        
-            radius_one = self.game.atlas.neighbors_within_radius(source_tile, 1)
-            radius_two = []
-            for tile in radius_one:
-                if tile.is_water and tile.unit is None:
-                    neighbors = self.game.atlas.neighbors_within_radius(tile, 1)
-                    radius_two.extend([t for t in neighbors if t.is_water and t.unit is None])
-            highlighted_tiles = [tile for tile in set(radius_one + radius_two) if tile.is_water and tile.unit is None]
-            
-            if(target_tile in highlighted_tiles):
-                self.game.move_unit(unit, source_tile, target_tile)
-                return True
-
-        
-        return False
-
-    def _handle_build(self, source_tile, target_tile):
-        if source_tile is None or target_tile is None or source_tile.unit is None:
-            return False
-        
-        
-        if target_tile not in self.game.atlas.neighbors(source_tile):
-            return False
-        
-        unit = source_tile.unit
-        if unit.owner != self.game.players[self.game.current_player_index]:
-            return False
-        
-        
-        if isinstance(unit, City):
-            if target_tile.unit is None:
-                if target_tile.is_water and unit.owner.currency >= Entity.ship_cost:
-                    self.game.place_battleship(source_tile.unit.owner,source_tile, target_tile)
-                    
-                    return True
-                elif not target_tile.is_water and unit.owner.currency >= Entity.soldier_cost:
-                    self.game.place_soldier(source_tile.unit.owner, source_tile, target_tile)
-
-                    
-                    return True
-                
-        else:
-            if target_tile.unit is None and not target_tile.is_water and unit.owner.currency>= Entity.city_cost* (1.6**(len(unit.owner.cities)-1)):
-                self.game.build_city(source_tile.unit.owner, source_tile, target_tile)
-                
-                return True
-
-            return False
-
-
-'''
