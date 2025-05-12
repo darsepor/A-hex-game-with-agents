@@ -39,4 +39,4 @@ Rules:
     *   **City:** HP 3. Builds soldiers and ships. Cost 10 (increases exponentially with count: `10 * 1.6**(N-1)`). Cannot move/attack.
     *   **Soldier:** HP 3. Cost 2. Moves 1 hex (land only). Attacks adjacent (1 dmg). Can build new Cities on adjacent empty land.
     *   **Battleship:** HP 3. Cost 10. Moves <=2 hexes (water only). Attacks within 2 hexes (1.5 dmg). Can also build new Cities on adjacent empty land.
-*   **Terrain:** Hex grid (plains, hills, water). Soldiers and cities restricted to land, Ships to water.
+*   **Terrain:** Hex grid (plains, hills, water). Soldiers and cities restricted to land, Ships to water. Hills currently are functionally the same as plains.
